@@ -1,0 +1,33 @@
+# deps / build
+node_modules/
+dist/
+.output/
+.nitro/
+.tanstack/
+.vercel/
+*.local
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs / os
+*.log
+.DS_Store
+Thumbs.db
+
+# sandbox / agent-only
+.grok/
+.project_id
+.node_modules.lock
+screenshots/
+attachments/
+artifacts/
+AGENTS.md
+AGENTS.project.md
+
+# large MediaPipe binaries (loaded from CDN at runtime)
+public/mediapipe/*.task
+public/mediapipe/wasm/*.wasm
+public/mediapipe/wasm/*.js

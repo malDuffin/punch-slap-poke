@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0c0b10;
+  --color-surface: #16141c;
+  --color-surface-2: #1e1b26;
+  --color-fg: #f2efe8;
+  --color-muted: #9a948a;
+  --color-faint: #6b6560;
+  --color-border: #2a2633;
+  --color-accent: #e8e4dc;
+  --color-accent-fg: #0c0b10;
+  --color-punch: #e23d3d;
+  --color-slap: #3db8e2;
+  --color-poke: #e2b03d;
+  --color-hp: #3dd68c;
+  --color-hp-low: #e25a3d;
+  --color-danger: #ff4d4d;
+  --font-display: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-body: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-body);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes combo-pop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  45% {
+    transform: scale(1.22);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes hit-flash {
+  0% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes power-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.35);
+  }
+}
+
+.animate-float-in {
+  animation: float-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-combo-pop {
+  animation: combo-pop 240ms cubic-bezier(0.34, 1.36, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-in,
+  .animate-combo-pop {
+    animation: none;
+  }
+}
+
+
+/* Camera motion cues — big dumb in-your-face juice */
+@keyframes boom-punch {
+  0% { transform: scale(0.2) rotate(-12deg); opacity: 0; filter: blur(8px); }
+  18% { transform: scale(1.35) rotate(4deg); opacity: 1; filter: blur(0); }
+  55% { transform: scale(1.05) rotate(-2deg); opacity: 1; }
+  100% { transform: scale(1.4) rotate(0deg); opacity: 0; filter: blur(2px); }
+}
+@keyframes slap-whoosh-left {
+  0% { transform: translateX(40%) scale(0.4) rotate(8deg); opacity: 0; }
+  20% { transform: translateX(0%) scale(1.25) rotate(-6deg); opacity: 1; }
+  70% { transform: translateX(-8%) scale(1.1) rotate(2deg); opacity: 1; }
+  100% { transform: translateX(-55%) scale(0.9) rotate(-4deg); opacity: 0; }
+}
+@keyframes slap-whoosh-right {
+  0% { transform: translateX(-40%) scale(0.4) rotate(-8deg); opacity: 0; }
+  20% { transform: translateX(0%) scale(1.25) rotate(6deg); opacity: 1; }
+  70% { transform: translateX(8%) scale(1.1) rotate(-2deg); opacity: 1; }
+  100% { transform: translateX(55%) scale(0.9) rotate(4deg); opacity: 0; }
+}
+@keyframes screen-punch-shake {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  15% { transform: translate(-14px, 6px) rotate(-1.2deg); }
+  30% { transform: translate(12px, -8px) rotate(1deg); }
+  45% { transform: translate(-10px, -4px) rotate(-0.8deg); }
+  60% { transform: translate(10px, 8px) rotate(0.6deg); }
+  75% { transform: translate(-6px, 2px) rotate(-0.3deg); }
+}
+@keyframes slap-streak {
+  0% { opacity: 0; transform: scaleX(0.2); }
+  25% { opacity: 0.95; transform: scaleX(1.1); }
+  100% { opacity: 0; transform: scaleX(1.4); }
+}
+@keyframes impact-ring-pop {
+  0% { transform: scale(0.3); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+@keyframes cue-spark {
+  0% { transform: scale(0) translateY(0); opacity: 1; }
+  100% { transform: scale(1.2) translateY(-40px); opacity: 0; }
+}
+.animate-boom-punch {
+  animation: boom-punch 720ms cubic-bezier(0.22, 1.4, 0.36, 1) both;
+}
+.animate-slap-left {
+  animation: slap-whoosh-left 700ms cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+.animate-slap-right {
+  animation: slap-whoosh-right 700ms cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+.animate-screen-punch {
+  animation: screen-punch-shake 380ms ease-out both;
+}
+.animate-slap-streak {
+  animation: slap-streak 520ms ease-out both;
+}
+.animate-impact-ring {
+  animation: impact-ring-pop 560ms ease-out both;
+}
