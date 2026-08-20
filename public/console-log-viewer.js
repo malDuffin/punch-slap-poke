@@ -9,7 +9,7 @@ var ConsoleLogViewer = (function() {
 	ConsoleLogViewer.IS_MINIMIZED = false; // true | false
 	ConsoleLogViewer.LOG_ENABLED = true;
 	ConsoleLogViewer.IS_CLOSED = false;
-	ConsoleLogViewer.TOTAL = 15;
+	ConsoleLogViewer.TOTAL = 6;
 	
 	var _items = [];
 	
@@ -180,6 +180,12 @@ var ConsoleLogViewer = (function() {
 					{
 						ConsoleLogViewer.ALIGNMENT = "bottom";
 					} 
+					var totalMatch = script.src.match(/[?&]total=(\d+)/);
+					if (totalMatch)
+					{
+						var n = parseInt(totalMatch[1], 10);
+						if (n > 0) ConsoleLogViewer.TOTAL = n;
+					}
 					if (script.src.indexOf('minimized=true') !== -1)
 					{
 						ConsoleLogViewer.IS_MINIMIZED = true;
@@ -277,7 +283,7 @@ var ConsoleLogViewer = (function() {
 	{
 		var css = '#debug_console { background: rgba(0,0,0,.75); position:fixed; padding:0; margin:0; z-index:12834567; box-sizing:border-box; pointer-events:none; text-align:left; text-transform:none; }';
 		css += '#debug_console, #debug_console * { font: 12px sans-serif!important;  }';
-		css += '#debug_console_messages { background:transparent;pointer-events:none; }'
+		css += '#debug_console_messages { background:transparent;pointer-events:none;max-height:7.8em;overflow:hidden;line-height:1.3; }'
 		css += '#debug_console_button { border:1px solid #fff; position:absolute; z-index:2;  }';
 		css += '#debug_console.top-aligned {left:0; right:0; top:0;}';
 		css += '#debug_console.minimized {left:0; right:0; top:0;}';

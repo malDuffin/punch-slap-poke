@@ -1,4 +1,5 @@
 export { P2PRoom, defaultIceServers } from "./p2p";
+export { PartyArena, partyHost, slotWorldX } from "./partyClient";
 export type {
   PeerInfo,
   P2PRoomOptions,
@@ -7,3 +8,4 @@ export type {
   SignalRow,
   RtcPollResponse,
 } from "./p2p";
+export type { HandSnap, RemoteState } from "./partyClient";

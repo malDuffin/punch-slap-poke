@@ -1,6 +1,6 @@
 export type HandMode = "punch" | "slap" | "poke";
 
-export type GamePhase = "menu" | "readying" | "playing" | "paused" | "waveClear" | "gameover" | "victory";
+export type GamePhase = "booting" | "menu" | "tutorial" | "readying" | "playing" | "paused" | "waveClear" | "gameover" | "victory";
 
 export type PlatformKind = "desktop" | "mobile" | "xr";
 
@@ -45,6 +45,10 @@ export interface HudState {
   xrVendor?: string | null;
   xrForce?: boolean;
   xrHandsOn?: boolean;
+  /** Impact burst particles on projectile hits */
+  fxHitParticles?: boolean;
+  /** Flight ribbon / lace trail behind projectiles (default on) */
+  fxFlightTrail?: boolean;
   xrRaysOff?: boolean;
   platform: PlatformKind;
   fps: number;
@@ -71,6 +75,30 @@ export interface HudState {
   handDebugInfo?: unknown;
   /** XR prop scale (real-world meters factor) */
   xrHandScale?: number;
+  /** PartyKit room */
+  mpRoom?: string;
+  mpName?: string;
+  mpConnected?: boolean;
+  mpPeers?: number;
+  mpError?: string | null;
+  mpPeerNames?: string[];
+  /** 0–1 half-heart fuse glow */
+  mpGlow?: number;
+  /** 0–1 walkway throttle (lever) */
+  walkSpeed?: number;
+  /** Boot / loading gate — play + WebXR locked until true */
+  bootReady?: boolean;
+  bootPct?: number;
+  bootStep?: string;
+  bootLog?: string[];
+  /** Tutorial lesson id while phase === tutorial */
+  tutorialStep?: string | null;
+  tutorialTitle?: string;
+  tutorialBody?: string;
+  tutorialHint?: string;
+  tutorialProgress?: number;
+  tutorialNeed?: number;
+  tutorialWaving?: boolean;
 }
 
 /** Full-screen funny feedback for camera punch / slap motions */

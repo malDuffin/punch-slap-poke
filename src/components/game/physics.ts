@@ -139,7 +139,7 @@ export class Box3Physics {
     sd.enableSensorEvents = false;
     sd.filter = this.makeFilter(
       PhysLayer.STATIC,
-      PhysLayer.CRATE | PhysLayer.PROJECTILE | PhysLayer.GRENADE,
+      PhysLayer.CRATE | PhysLayer.GRENADE,
     );
     if (sd.baseMaterial) {
       sd.baseMaterial.friction = mat.friction ?? 0.8;
@@ -248,8 +248,8 @@ export class Box3Physics {
       friction?: number;
       restitution?: number;
       bullet?: boolean;
-      /** "projectile" | "grenade" */
-      role?: "projectile" | "grenade";
+      /** "projectile" | "grenade" | "ball" */
+      role?: "projectile" | "grenade" | "ball";
       gravityScale?: number;
     } = {},
   ): B3Body | null {
@@ -262,8 +262,8 @@ export class Box3Physics {
     def.isBullet = !!opts.bullet || role === "projectile";
     def.enableSleep = true;
     def.isAwake = true;
-    def.linearDamping = role === "projectile" ? 0.05 : 0.12;
-    def.angularDamping = 0.2;
+    def.linearDamping = role === "projectile" ? 0 : role === "ball" ? 0.28 : 0.12;
+    def.angularDamping = role === "projectile" ? 0.05 : role === "ball" ? 0.35 : 0.2;
     // Projectiles fly straight; only grenades (and explicit overrides) feel gravity
     def.gravityScale = opts.gravityScale ?? (role === "projectile" ? 0 : 1);
     def.sleepThreshold = 0.12;
@@ -274,16 +274,21 @@ export class Box3Physics {
     if (b3.b3Body_SetGravityScale) b3.b3Body_SetGravityScale(body, gScale);
 
     const sd = b3.b3DefaultShapeDef();
-    sd.density = opts.density ?? (role === "grenade" ? 600 : 220);
+    sd.density = opts.density ?? (role === "grenade" ? 600 : role === "ball" ? 160 : 220);
     sd.enableContactEvents = false;
     sd.enableHitEvents = false;
     sd.enableSensorEvents = false;
 
     if (role === "projectile") {
-      // Projectiles hit crates + floor, NOT each other (big broadphase win)
+      // Fly through playground walls/floor — only shove crates
       sd.filter = this.makeFilter(
         PhysLayer.PROJECTILE,
-        PhysLayer.STATIC | PhysLayer.CRATE | PhysLayer.GRENADE,
+        PhysLayer.CRATE,
+      );
+    } else if (role === "ball") {
+      sd.filter = this.makeFilter(
+        PhysLayer.CRATE,
+        PhysLayer.STATIC | PhysLayer.CRATE | PhysLayer.PROJECTILE | PhysLayer.GRENADE,
       );
     } else {
       sd.filter = this.makeFilter(
@@ -293,8 +298,8 @@ export class Box3Physics {
     }
 
     if (sd.baseMaterial) {
-      sd.baseMaterial.friction = opts.friction ?? 0.35;
-      sd.baseMaterial.restitution = opts.restitution ?? 0.12;
+      sd.baseMaterial.friction = opts.friction ?? (role === "projectile" ? 0.02 : 0.35);
+      sd.baseMaterial.restitution = opts.restitution ?? (role === "projectile" ? 0 : 0.12);
     }
     b3.b3CreateSphereShape(body, sd, { center: [0, 0, 0], radius });
     return body;
@@ -312,6 +317,16 @@ export class Box3Physics {
   isAwake(body: B3Body): boolean {
     if (!this.b3 || !this.ready) return true;
     return this.b3.b3Body_IsAwake?.(body) ?? true;
+  }
+
+  setTransform(body: B3Body, x: number, y: number, z: number) {
+    if (!this.b3 || !this.ready || !body) return;
+    try {
+      this.b3.b3Body_SetTransform?.(body, [x, y, z], [0, 0, 0, 1]);
+      this.b3.b3Body_SetAwake?.(body, true);
+    } catch {
+      /* ignore */
+    }
   }
 
   setLinearVelocity(body: B3Body, vx: number, vy: number, vz: number) {

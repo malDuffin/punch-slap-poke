@@ -33,6 +33,23 @@ export function createPalette() {
       emissiveIntensity: 0.08,
     }),
     leafDark: new THREE.MeshStandardMaterial({ color: 0x2a6e35, roughness: 0.85 }),
+    leafLime: new THREE.MeshStandardMaterial({
+      color: 0x7dce4a,
+      roughness: 0.55,
+      emissive: 0x245018,
+      emissiveIntensity: 0.14,
+    }),
+    leafSun: new THREE.MeshStandardMaterial({
+      color: 0xc6d44a,
+      roughness: 0.58,
+      emissive: 0x4a5010,
+      emissiveIntensity: 0.12,
+    }),
+    barkDark: new THREE.MeshStandardMaterial({
+      color: 0x3d2414,
+      roughness: 0.96,
+      metalness: 0.02,
+    }),
     trunk: new THREE.MeshStandardMaterial({ color: 0x5c3a1e, roughness: 0.95 }),
     brawler: new THREE.MeshStandardMaterial({
       color: 0xc45ad4,
@@ -1513,44 +1530,75 @@ function heartMat(opacity = 0.92) {
   });
 }
 
-/** One lobe + half-point — left or right half of a heart for hand attach. */
+/** Classic heart outline, kept as a left or right lobe so one hand is a true half. */
+function halfHeartShape(side: "L" | "R"): THREE.Shape {
+  const s = new THREE.Shape();
+  const x = side === "L" ? -1 : 1;
+  s.moveTo(0, -0.17);
+  s.bezierCurveTo(x * 0.1, -0.08, x * 0.2, -0.01, x * 0.175, 0.07);
+  s.bezierCurveTo(x * 0.16, 0.17, x * 0.05, 0.19, 0, 0.09);
+  s.lineTo(0, -0.17);
+  return s;
+}
+
+/** 3D half-heart. Shows on that hand alone — the other hand does not need to match. */
 export function makeHeartHalf(_palette: Palette, side: "L" | "R"): THREE.Group {
   const g = new THREE.Group();
   g.name = "heartHalf_" + side;
-  const mat = heartMat(0.9);
-  const sign = side === "L" ? -1 : 1;
-  // Outer lobe
-  const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.11, 14, 12), mat);
-  lobe.position.set(sign * 0.06, 0.08, 0);
-  lobe.scale.set(1.05, 0.95, 0.55);
-  g.add(lobe);
-  // Inner cut-edge (flat-ish) so two halves read as connecting
-  const edge = new THREE.Mesh(
-    new THREE.BoxGeometry(0.02, 0.16, 0.08),
+  const solid = new THREE.MeshStandardMaterial({
+    color: 0xff2f72,
+    emissive: 0xff1458,
+    emissiveIntensity: 1.05,
+    roughness: 0.26,
+    metalness: 0.16,
+    side: THREE.DoubleSide,
+  });
+  const geo = new THREE.ExtrudeGeometry(halfHeartShape(side), {
+    depth: 0.06,
+    bevelEnabled: true,
+    bevelThickness: 0.012,
+    bevelSize: 0.01,
+    bevelSegments: 2,
+    curveSegments: 20,
+  });
+  geo.center();
+  geo.rotateX(Math.PI);
+  geo.translate(0, 0.02, 0);
+  const body = new THREE.Mesh(geo, solid);
+  body.castShadow = true;
+  g.add(body);
+
+  const cut = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.06, 0.28),
     new THREE.MeshStandardMaterial({
-      color: 0xff9ec4,
+      color: 0xffd4e8,
       emissive: 0xff4d8d,
-      emissiveIntensity: 1.1,
+      emissiveIntensity: 1.45,
+      side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.95,
     }),
   );
-  edge.position.set(0, 0.02, 0);
-  g.add(edge);
-  // Point half
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.16, 4), mat);
-  tip.rotation.z = Math.PI;
-  tip.position.set(sign * 0.03, -0.08, 0);
-  tip.scale.set(0.7, 1, 0.5);
-  g.add(tip);
-  // Glow ring
+  cut.position.set(side === "L" ? 0.014 : -0.014, 0.0, 0.0);
+  g.add(cut);
+
   const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 10, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff6aa8, transparent: true, opacity: 0.18, depthWrite: false }),
+    new THREE.SphereGeometry(0.16, 12, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xff6aa8,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      toneMapped: false,
+    }),
   );
-  glow.scale.set(1, 1.1, 0.6);
+  glow.scale.set(1.1, 1.25, 0.58);
   g.add(glow);
+
+  g.scale.setScalar(1.25);
   g.userData.gesture = "heart";
+  g.userData.heartMats = [solid, cut.material as THREE.MeshStandardMaterial];
+  g.userData.heartHalo = glow;
   return g;
 }
 
@@ -1682,7 +1730,26 @@ export function makeSpockHand(palette: Palette, side: "L" | "R"): THREE.Group {
   return g;
 }
 
-export type GestureKind = "thumbs" | "thumbsDown" | "peace" | "spock" | "heart" | "rockOn" | "none";
+export type GestureKind = "thumbs" | "thumbsDown" | "peace" | "spock" | "heart" | "rockOn" | "birdie" | "none";
+
+/** Pulse half-heart materials. amount 0 = idle, 1 = about to fuse. */
+export function setHeartHalfGlow(g: THREE.Object3D | null | undefined, amount = 0) {
+  if (!g) return;
+  const t = THREE.MathUtils.clamp(amount, 0, 1);
+  const mats = (g as THREE.Group).userData?.heartMats as THREE.MeshStandardMaterial[] | undefined;
+  if (mats) {
+    for (const m of mats) {
+      if (!m) continue;
+      m.emissiveIntensity = 0.85 + t * 1.6;
+      if (m.opacity != null) m.opacity = 0.88 + t * 0.12;
+    }
+  }
+  const halo = (g as THREE.Group).userData?.heartHalo as THREE.Mesh | undefined;
+  if (halo && (halo.material as THREE.MeshBasicMaterial)) {
+    (halo.material as THREE.MeshBasicMaterial).opacity = 0.16 + t * 0.55;
+    halo.scale.setScalar(1 + t * 0.45);
+  }
+}
 
 /** Factory for social / emoji hand props. */
 export function makeGestureHand(
@@ -1695,12 +1762,521 @@ export function makeGestureHand(
   if (kind === "peace") return makePeaceHand(palette, side);
   if (kind === "spock") return makeSpockHand(palette, side);
   if (kind === "heart") return makeHeartHalf(palette, side);
-  // rockOn → peace-like with metal horns hint
   if (kind === "rockOn") {
     const g = makePeaceHand(palette, side);
     g.name = "rockOn_" + side;
     g.userData.gesture = "rockOn";
     return g;
   }
+  if (kind === "birdie") return makeBirdHand(palette, side);
   return makeThumbsUpHand(palette, side);
 }
+
+/** Flapping bird prop for the middle-finger gesture. */
+export function makeBirdHand(palette: Palette, side: "L" | "R"): THREE.Group {
+  const g = new THREE.Group();
+  g.name = "birdie_" + side;
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0xf2c14e,
+    roughness: 0.45,
+    metalness: 0.08,
+    emissive: 0x5a3a08,
+    emissiveIntensity: 0.18,
+  });
+  const wingMat = new THREE.MeshStandardMaterial({
+    color: 0xffef9a,
+    roughness: 0.5,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+    emissive: 0x6a5010,
+    emissiveIntensity: 0.12,
+  });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 10), bodyMat);
+  body.scale.set(1, 0.85, 1.25);
+  body.castShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.032, 10, 8), bodyMat);
+  head.position.set(0, 0.03, -0.07);
+  g.add(head);
+  const beak = new THREE.Mesh(
+    new THREE.ConeGeometry(0.012, 0.04, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff7722, roughness: 0.4 }),
+  );
+  beak.rotation.x = -Math.PI / 2;
+  beak.position.set(0, 0.028, -0.1);
+  g.add(beak);
+  const wingL = new THREE.Group();
+  const wingR = new THREE.Group();
+  const wMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.055), wingMat);
+  wMesh.position.x = 0.055;
+  wingL.add(wMesh);
+  const wMeshR = wMesh.clone();
+  wMeshR.position.x = -0.055;
+  wingR.add(wMeshR);
+  wingL.position.set(0.02, 0.01, 0);
+  wingR.position.set(-0.02, 0.01, 0);
+  g.add(wingL);
+  g.add(wingR);
+  g.userData.gesture = "birdie";
+  g.userData.baseScale = 1;
+  g.userData.modelSpace = "prop";
+  g.userData.wingJoints = [wingL, wingR];
+  void palette;
+  void side;
+  return g;
+}
+
+/** Gym heavy bag on a steel gantry. Pivot child `bagPivot` swings; `bagBody` is the leather. */
+export function makeHeavyBagRig(): THREE.Group {
+  const root = new THREE.Group();
+  root.name = "heavyBagRig";
+  const steel = mat(0x4a515c, { rough: 0.32, metal: 0.88, em: 0.04, emCol: 0x1a2028 });
+  const steelDark = mat(0x2a3038, { rough: 0.4, metal: 0.82 });
+  const leather = mat(0x6a2a22, { rough: 0.62, metal: 0.08, em: 0.08, emCol: 0x2a0808 });
+  const leatherDark = mat(0x3a1612, { rough: 0.7, metal: 0.06 });
+
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.15, 10), steel);
+  post.position.set(-0.05, 1.58, 0);
+  post.castShadow = true;
+  root.add(post);
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.08, 12), steelDark);
+  foot.position.set(-0.05, 0.04, 0);
+  root.add(foot);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.08, 0.08), steel);
+  arm.position.set(0.38, 3.02, 0);
+  arm.castShadow = true;
+  root.add(arm);
+  const hook = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.012, 8, 14, Math.PI), steel);
+  hook.position.set(0.62, 2.94, 0);
+  hook.rotation.z = Math.PI;
+  root.add(hook);
+
+  const links: THREE.Mesh[] = [];
+  for (let i = 0; i < 8; i++) {
+    const link = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.008, 6, 10), steel);
+    link.position.set(0.62, 2.86 - i * 0.09, 0);
+    root.add(link);
+    links.push(link);
+  }
+
+  const pivot = new THREE.Group();
+  pivot.name = "bagPivot";
+  pivot.position.set(0.62, 2.18, 0);
+  root.add(pivot);
+
+  const bag = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 1.18, 16), leather);
+  bag.position.y = -0.72;
+  bag.castShadow = true;
+  bag.name = "bagBody";
+  pivot.add(bag);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), leatherDark);
+  cap.scale.y = 0.45;
+  cap.position.y = -0.14;
+  pivot.add(cap);
+  const heel = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 8), leatherDark);
+  heel.scale.y = 0.4;
+  heel.position.y = -1.28;
+  pivot.add(heel);
+  for (let i = 0; i < 4; i++) {
+    const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.225, 0.012, 6, 16), leatherDark);
+    stripe.rotation.x = Math.PI / 2;
+    stripe.position.y = -0.35 - i * 0.22;
+    pivot.add(stripe);
+  }
+
+  root.userData.bagPivot = pivot;
+  root.userData.bagBody = bag;
+  root.userData.chainLinks = links;
+  root.userData.hookLocal = new THREE.Vector3(0.62, 3.02, 0);
+  return root;
+}
+
+export const GUMBALL_COLORS = [0xff3355, 0xffcc22, 0x33dd66, 0x3399ff, 0xcc55ff, 0xff7722, 0xffef6a];
+
+/** Carnival gumball machine — globe / candy / cracks named for hit states. */
+export function makeGumballMachine(): THREE.Group {
+  const root = new THREE.Group();
+  root.name = "gumballMachine";
+  const chrome = mat(0xc8d4de, { rough: 0.22, metal: 0.92, em: 0.06, emCol: 0x304050 });
+  const chromeDark = mat(0x3a444c, { rough: 0.35, metal: 0.8 });
+  const red = mat(0xc42a2a, { rough: 0.4, metal: 0.15, em: 0.2, emCol: 0x4a0808 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.42, 16), red);
+  base.position.y = 0.21;
+  base.castShadow = true;
+  root.add(base);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.03, 8, 20), chrome);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.42;
+  root.add(ring);
+
+  const candy = new THREE.Group();
+  candy.name = "candy";
+  for (let i = 0; i < 18; i++) {
+    const col = GUMBALL_COLORS[i % GUMBALL_COLORS.length];
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), mat(col, { rough: 0.25, metal: 0.15, em: 0.1, emCol: col }));
+    const a = (i / 18) * Math.PI * 2;
+    const r = 0.11 + (i % 3) * 0.03;
+    b.position.set(Math.cos(a) * r, 0.72 + (i % 5) * 0.07, Math.sin(a) * r);
+    candy.add(b);
+  }
+  root.add(candy);
+
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(0.32, 20, 16),
+    new THREE.MeshStandardMaterial({
+      color: 0xc8f0ff,
+      roughness: 0.08,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.28,
+      emissive: 0x204050,
+      emissiveIntensity: 0.08,
+    }),
+  );
+  globe.position.y = 0.78;
+  globe.name = "globe";
+  root.add(globe);
+  const glass = globe.clone();
+  glass.name = "globeGlass";
+  glass.scale.setScalar(1.01);
+  root.add(glass);
+
+  const cracks = new THREE.Group();
+  cracks.name = "cracks";
+  cracks.visible = false;
+  const crackMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+  for (let i = 0; i < 5; i++) {
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.22, 0.004), crackMat);
+    c.position.set((i - 2) * 0.05, 0.78, 0.3);
+    c.rotation.z = (i - 2) * 0.35;
+    cracks.add(c);
+  }
+  root.add(cracks);
+
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), chrome);
+  knob.position.y = 1.14;
+  root.add(knob);
+  const spout = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.1), chrome);
+  spout.position.set(0, 0.22, 0.28);
+  root.add(spout);
+
+  root.userData.globe = globe;
+  root.userData.candy = candy;
+  root.userData.cracks = cracks;
+  return root;
+}
+
+export function makeGumball(color = 0xff3355): THREE.Mesh {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.07, 12, 10),
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.22,
+      metalness: 0.18,
+      emissive: color,
+      emissiveIntensity: 0.12,
+    }),
+  );
+  m.castShadow = true;
+  m.name = "gumball";
+  return m;
+}
+
+function leafClusterMat(palette: Palette, i: number) {
+  const mats = [palette.leaf, palette.leafDark, palette.leafLime || palette.leaf, palette.leafSun || palette.leaf];
+  return mats[i % mats.length];
+}
+
+/** A single fluttering leaf for the punch-off burst. */
+export function makeFallingLeaf(palette: Palette): THREE.Mesh {
+  const mats = [palette.leaf, palette.leafDark, palette.leafLime || palette.leaf, palette.leafSun || palette.leaf];
+  const src = mats[(Math.random() * mats.length) | 0] as THREE.MeshStandardMaterial;
+  const mat = src.clone();
+  mat.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.055, 7, 5), mat);
+  mesh.scale.set(0.55, 0.12, 1.05);
+  mesh.castShadow = true;
+  mesh.name = "fallingLeaf";
+  return mesh;
+}
+
+/** Punchable arena tree. `canopy` hides when stripped; trunk group topples from the base. */
+export function makeArenaTree(palette: Palette, seed = 1): THREE.Group {
+  const root = new THREE.Group();
+  root.name = "arenaTree";
+  const rnd = (n: number) => {
+    const x = Math.sin(seed * 127.1 + n * 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const fall = new THREE.Group();
+  fall.name = "treeFall";
+  const trunkH = 1.45 + rnd(2) * 0.55;
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09 + rnd(3) * 0.04, 0.16 + rnd(4) * 0.05, trunkH, 8),
+    palette.trunk,
+  );
+  trunk.position.y = trunkH * 0.5;
+  trunk.castShadow = true;
+  fall.add(trunk);
+  const canopy = new THREE.Group();
+  canopy.name = "canopy";
+  const crownY = trunkH + 0.15;
+  for (let i = 0; i < 5; i++) {
+    const clump = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.42 + rnd(10 + i) * 0.22, 1),
+      leafClusterMat(palette, i),
+    );
+    clump.position.set((rnd(20 + i) - 0.5) * 0.55, crownY + rnd(30 + i) * 0.45, (rnd(40 + i) - 0.5) * 0.55);
+    clump.castShadow = true;
+    canopy.add(clump);
+  }
+  fall.add(canopy);
+  root.add(fall);
+  root.userData.canopy = canopy;
+  root.userData.fall = fall;
+  root.userData.trunkH = trunkH;
+  return root;
+}
+
+/** Airport-style rubber belt: grooves + yellow chevrons pointing along −Z travel. */
+function makeWalkwayBeltTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 512;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#2a2e32";
+  ctx.fillRect(0, 0, 256, 512);
+  ctx.fillStyle = "#23262a";
+  for (let y = 0; y < 512; y += 18) ctx.fillRect(0, y, 256, 7);
+  ctx.fillStyle = "#1a1d20";
+  for (let y = 8; y < 512; y += 18) ctx.fillRect(0, y + 4, 256, 2);
+  ctx.strokeStyle = "#e8c43a";
+  ctx.lineWidth = 10;
+  ctx.lineJoin = "miter";
+  for (let y = 28; y < 512; y += 86) {
+    ctx.beginPath();
+    ctx.moveTo(48, y + 38);
+    ctx.lineTo(128, y);
+    ctx.lineTo(208, y + 38);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#c9a227";
+  ctx.fillRect(0, 0, 14, 512);
+  ctx.fillRect(242, 0, 14, 512);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function makeLeverLabelTexture(text: string, color = "#ffe08a"): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 64;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#14181c";
+  ctx.fillRect(0, 0, 256, 64);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(4, 4, 248, 56);
+  ctx.fillStyle = color;
+  ctx.font = "bold 32px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 128, 34);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Flat airport moving walkway — rubber belt, metal comb, glass side rails.
+ * Belt UVs run along Z so `beltMat.map.offset.y` can stick to the rider.
+ */
+export function makeMovingWalkway(_palette: Palette): THREE.Group {
+  const root = new THREE.Group();
+  root.name = "movingWalkway";
+  const length = 96;
+  const width = 5.6;
+  const halfW = width * 0.5;
+  const beltTex = makeWalkwayBeltTexture();
+  beltTex.repeat.set(1, length / 4);
+  const beltMat = new THREE.MeshStandardMaterial({
+    map: beltTex,
+    roughness: 0.92,
+    metalness: 0.08,
+    color: 0xffffff,
+  });
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(width - 0.28, 0.08, length), beltMat);
+  belt.position.y = 0.06;
+  belt.receiveShadow = true;
+  belt.name = "walkwayBelt";
+  root.add(belt);
+
+  const under = new THREE.Mesh(
+    new THREE.BoxGeometry(width + 0.2, 0.18, length),
+    new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.7, metalness: 0.45 }),
+  );
+  under.position.y = -0.08;
+  under.receiveShadow = true;
+  root.add(under);
+
+  const steel = _palette.metal;
+  const yellow = new THREE.MeshStandardMaterial({
+    color: 0xe8c43a,
+    roughness: 0.42,
+    metalness: 0.18,
+    emissive: 0x5a4010,
+    emissiveIntensity: 0.35,
+  });
+  for (const sx of [-1, 1] as const) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.04, length), yellow);
+    stripe.position.set(sx * (halfW - 0.22), 0.12, 0);
+    root.add(stripe);
+    const railBase = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, length), steel);
+    railBase.position.set(sx * (halfW + 0.02), 0.18, 0);
+    railBase.castShadow = true;
+    root.add(railBase);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.72, length - 0.4), _palette.glass.clone());
+    glass.position.set(sx * (halfW + 0.02), 0.7, 0);
+    root.add(glass);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, length), steel);
+    cap.position.set(sx * (halfW + 0.02), 1.08, 0);
+    cap.castShadow = true;
+    root.add(cap);
+    for (let i = 0; i < 16; i++) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.95, 0.07), steel);
+      post.position.set(sx * (halfW + 0.02), 0.55, -length * 0.45 + i * (length / 16));
+      post.castShadow = true;
+      root.add(post);
+    }
+  }
+  const comb = new THREE.Mesh(new THREE.BoxGeometry(width - 0.2, 0.05, 0.55), yellow);
+  comb.position.set(0, 0.12, length * 0.5 - 0.2);
+  root.add(comb);
+
+  root.userData.beltMat = beltMat;
+  root.userData.belt = belt;
+  root.userData.length = length;
+  root.userData.width = width;
+  return root;
+}
+
+/**
+ * Throttle lever. Default is pushed BACK (amount 0).
+ * Pivot rotates around X: +rest = back / idle, −full = forward / max speed.
+ */
+export function makeSpeedLever(_palette: Palette): THREE.Group {
+  const root = new THREE.Group();
+  root.name = "speedLever";
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x8a97a6, roughness: 0.28, metalness: 0.88, emissive: 0x1a222c, emissiveIntensity: 0.12,
+  });
+  const steelDark = new THREE.MeshStandardMaterial({ color: 0x2a323c, roughness: 0.4, metalness: 0.72 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.78, metalness: 0.08 });
+  const grip = new THREE.MeshStandardMaterial({
+    color: 0xc42a2a, roughness: 0.45, metalness: 0.12, emissive: 0x4a0808, emissiveIntensity: 0.35,
+  });
+  const panel = new THREE.MeshStandardMaterial({ color: 0x161a20, roughness: 0.55, metalness: 0.4 });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.12, 14), steelDark);
+  base.position.y = 0.06;
+  base.castShadow = true;
+  root.add(base);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.82, 12), steel);
+  column.position.y = 0.5;
+  column.castShadow = true;
+  root.add(column);
+  const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.42), panel);
+  consoleBox.position.set(0, 0.9, 0.02);
+  consoleBox.rotation.x = -0.18;
+  consoleBox.castShadow = true;
+  root.add(consoleBox);
+  const label = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.22, 0.055),
+    new THREE.MeshBasicMaterial({ map: makeLeverLabelTexture("SPEED"), toneMapped: false }),
+  );
+  label.position.set(0, 0.95, 0.18);
+  label.rotation.x = -0.35;
+  root.add(label);
+
+  const pips: THREE.Mesh[] = [];
+  for (let i = 0; i < 5; i++) {
+    const pip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.016, 8, 6),
+      new THREE.MeshStandardMaterial({
+        color: 0x1a2418, roughness: 0.4, emissive: 0x3aaa4c, emissiveIntensity: 0.05,
+      }),
+    );
+    pip.position.set(-0.08 + i * 0.04, 0.955, 0.08);
+    root.add(pip);
+    pips.push(pip);
+  }
+
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.18), steelDark);
+  housing.position.set(0, 0.88, -0.06);
+  housing.castShadow = true;
+  root.add(housing);
+
+  const pivot = new THREE.Group();
+  pivot.name = "leverPivot";
+  pivot.position.set(0, 0.92, -0.06);
+  root.add(pivot);
+  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.4, 10), steel);
+  stick.position.y = 0.2;
+  stick.castShadow = true;
+  pivot.add(stick);
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.11, 20, 16), grip);
+  handle.position.y = 0.42;
+  handle.castShadow = true;
+  handle.name = "leverHandle";
+  pivot.add(handle);
+  const ridges = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.014, 8, 16), rubber);
+  ridges.rotation.x = Math.PI / 2;
+  ridges.position.y = 0.42;
+  pivot.add(ridges);
+  const knobCap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.036, 0.036, 0.045, 10),
+    new THREE.MeshStandardMaterial({ color: 0xffe08a, emissive: 0x8a7010, emissiveIntensity: 0.6, metalness: 0.4, roughness: 0.3 }),
+  );
+  knobCap.position.y = 0.5;
+  pivot.add(knobCap);
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.16, 0.012, 8, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xffe08a, transparent: true, opacity: 0.32, depthWrite: false, toneMapped: false,
+    }),
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = 0.42;
+  halo.name = "leverHalo";
+  pivot.add(halo);
+  // Idle = pushed BACK toward the player (+X rotation)
+  pivot.rotation.x = 0.72;
+
+  const slot = new THREE.Mesh(
+    new THREE.TorusGeometry(0.38, 0.01, 6, 18, 1.5),
+    new THREE.MeshStandardMaterial({ color: 0x1a222c, metalness: 0.5, roughness: 0.4, emissive: 0x243040, emissiveIntensity: 0.2 }),
+  );
+  slot.rotation.y = Math.PI / 2;
+  slot.rotation.z = -0.72;
+  slot.position.set(0.07, 0.92, -0.06);
+  root.add(slot);
+
+  root.userData.pivot = pivot;
+  root.userData.handle = handle;
+  root.userData.halo = halo;
+  root.userData.pips = pips;
+  root.userData.restAng = 0.72;
+  root.userData.fullAng = -0.68;
+  return root;
+}
+
+export { makeTutorialPoseGuide, preloadPoseGuideHands, poseGuidesReady, placePoseGuide } from "./poseGuides";
+
+
+

@@ -33,6 +33,13 @@ function RootLayout() {
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-ESG8QE85ZE" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ESG8QE85ZE');",
+          }}
+        />
       </head>
       <body>
         <AuthProvider>

@@ -31,3 +31,7 @@ AGENTS.project.md
 public/mediapipe/*.task
 public/mediapipe/wasm/*.wasm
 public/mediapipe/wasm/*.js
+
+# PartyKit local persist
+.partykit/
+.wrangler/

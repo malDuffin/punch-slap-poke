@@ -3,24 +3,25 @@
  * https://github.com/markknol/console-log-viewer
  *
  * Script lives at /console-log-viewer.js (public/).
- * Default: debugging ON.
+ * Default: debugging OFF.
  */
 
 const STORAGE_KEY = "glove-fight-debugging";
 const SCRIPT_ID = "console-log-viewer-script";
 /** bottom-aligned so it doesn't cover the title menu as hard */
-const SCRIPT_SRC = "/console-log-viewer.js?align=bottom";
+const SCRIPT_SRC = "/console-log-viewer.js?align=bottom&total=6";
+const MAX_ONSCREEN_LINES = 6;
 
 let loadPromise: Promise<void> | null = null;
 
 export function isDebuggingEnabled(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === null) return true; // default ON
+    if (v === null) return false;
     return v === "1" || v === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -41,12 +42,44 @@ function setOverlayVisible(on: boolean) {
     el.setAttribute("aria-hidden", on ? "false" : "true");
   }
   // Static props on the viewer constructor (if exposed on window)
-  const CLV = (window as unknown as { ConsoleLogViewer?: { LOG_ENABLED?: boolean; IS_CLOSED?: boolean } })
+  const CLV = (window as unknown as { ConsoleLogViewer?: { LOG_ENABLED?: boolean; IS_CLOSED?: boolean; TOTAL?: number } })
     .ConsoleLogViewer;
   if (CLV) {
     CLV.LOG_ENABLED = on;
+    CLV.TOTAL = MAX_ONSCREEN_LINES;
     if (on) CLV.IS_CLOSED = false;
   }
+  if (on) {
+    watchOnscreenLog();
+    trimOnscreenLog();
+  }
+}
+
+/** Keep the overlay at most six log lines, including a live session that already overflowed. */
+function trimOnscreenLog() {
+  if (typeof document === "undefined") return;
+  const m = document.getElementById("debug_console_messages");
+  if (!m) return;
+  m.style.maxHeight = "7.8em";
+  m.style.overflow = "hidden";
+  m.style.lineHeight = "1.3";
+  const parts = m.innerHTML.split(/<br\s*\/?>/i).filter((p) => p.trim().length > 0);
+  if (parts.length > MAX_ONSCREEN_LINES) {
+    m.innerHTML = parts.slice(-MAX_ONSCREEN_LINES).join("<br>");
+  }
+}
+
+function watchOnscreenLog() {
+  if (typeof document === "undefined") return;
+  const m = document.getElementById("debug_console_messages");
+  if (!m || m.dataset.gfTrim === "1") return;
+  m.dataset.gfTrim = "1";
+  const obs = new MutationObserver(() => {
+    obs.disconnect();
+    trimOnscreenLog();
+    obs.observe(m, { childList: true, subtree: true, characterData: true });
+  });
+  obs.observe(m, { childList: true, subtree: true, characterData: true });
 }
 
 function loadViewerScript(): Promise<void> {
@@ -94,7 +127,7 @@ export async function applyDebugging(on: boolean): Promise<void> {
   }
 }
 
-/** Call once on app mount — respects stored preference (default on). */
+/** Call once on app mount — respects stored preference (default off). */
 export function initDebuggingFromPreference(): void {
   if (typeof window === "undefined") return;
   const on = isDebuggingEnabled();

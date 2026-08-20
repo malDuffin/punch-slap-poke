@@ -9,7 +9,9 @@ import {
   Loader2,
   Pause,
   Play,
+  Radio,
   Scissors,
+  Users,
   Volume2,
   VolumeX,
   Zap,
@@ -33,7 +35,7 @@ function buildInitialHud(): HudState {
     headset = false;
   }
   return {
-    phase: "menu",
+    phase: "booting",
     health: 100,
     maxHealth: 100,
     score: 0,
@@ -62,6 +64,9 @@ function buildInitialHud(): HudState {
     xrDeviceName: "",
     xrVendor: null,
     xrForce: false,
+    xrHandsOn: true,
+    fxHitParticles: false,
+    fxFlightTrail: true,
     xrEmbedded: false,
     platform: headset ? "xr" : "desktop",
     fps: 60,
@@ -74,6 +79,16 @@ function buildInitialHud(): HudState {
     trackReady: false,
     countdown: null,
     waveClearCanContinue: false,
+    bootReady: false,
+    bootPct: 0,
+    bootStep: "Waking the ring…",
+    bootLog: [],
+    tutorialStep: null,
+    tutorialTitle: "",
+    tutorialBody: "",
+    tutorialHint: "",
+    tutorialProgress: 0,
+    tutorialNeed: 0,
   };
 }
 
@@ -108,10 +123,12 @@ export function GloveFight() {
   const [motionCue, setMotionCue] = useState<MotionCue | null>(null);
   const prevCombo = useRef(0);
   const [engineReady, setEngineReady] = useState(false);
-  const [debugging, setDebugging] = useState(true);
+  const [debugging, setDebugging] = useState(false);
   const [pageUrl, setPageUrl] = useState("");
+  const [roomDraft, setRoomDraft] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
 
-  // On-screen console (markknol/console-log-viewer) — default ON
+  // On-screen console (markknol/console-log-viewer) — default OFF, max 6 lines when on
   useEffect(() => {
     const on = isDebuggingEnabled();
     setDebugging(on);
@@ -169,6 +186,28 @@ export function GloveFight() {
     prevCombo.current = hud.combo;
   }, [hud.combo]);
 
+  useEffect(() => {
+    if (hud.mpRoom) setRoomDraft((r) => r || hud.mpRoom || "");
+    if (hud.mpName) setNameDraft((n) => n || hud.mpName || "");
+  }, [hud.mpRoom, hud.mpName]);
+
+  const joinRoom = useCallback(() => {
+    engineRef.current?.joinParty(roomDraft || "arena", nameDraft || "Fighter");
+  }, [roomDraft, nameDraft]);
+
+  const copyRoomLink = useCallback(() => {
+    const room = (roomDraft || hud.mpRoom || "arena").replace(/[^a-zA-Z0-9_-]/g, "") || "arena";
+    let base = pageUrl || "";
+    try {
+      const u = new URL(pageUrl || window.location.href);
+      u.searchParams.set("room", room);
+      if (nameDraft) u.searchParams.set("name", nameDraft);
+      base = u.toString();
+    } catch {
+      base = `${pageUrl || ""}?room=${encodeURIComponent(room)}`;
+    }
+    void navigator.clipboard?.writeText(base).catch(() => {});
+  }, [pageUrl, roomDraft, nameDraft, hud.mpRoom]);
   const start = useCallback(() => engineRef.current?.startGame(), []);
   const resume = useCallback(() => {
     if (hud.phase === "waveClear" || hud.phase === "victory") {
@@ -181,6 +220,15 @@ export function GloveFight() {
   }, []);
   const setForceXr = useCallback((on: boolean) => {
     engineRef.current?.setForceXr?.(on);
+  }, []);
+  const setShowSkinnedHands = useCallback((on: boolean) => {
+    engineRef.current?.setShowSkinnedHands?.(on);
+  }, []);
+  const setFxHitParticles = useCallback((on: boolean) => {
+    engineRef.current?.setFxHitParticles?.(on);
+  }, []);
+  const setFxFlightTrail = useCallback((on: boolean) => {
+    engineRef.current?.setFxFlightTrail?.(on);
   }, []);
   const openFullForVR = useCallback(() => {
     engineRef.current?.openTopLevelForVR?.();
@@ -199,8 +247,11 @@ export function GloveFight() {
   const powerPct = Math.max(0, hud.power * 100);
   const playing = hud.phase === "playing";
   const readying = hud.phase === "readying";
+  const tutorial = hud.phase === "tutorial";
+  const booting = hud.phase === "booting" || !hud.bootReady;
   const showOverlay =
     !hud.xrActive &&
+    !booting &&
     (hud.phase === "menu" ||
       hud.phase === "paused" ||
       hud.phase === "waveClear" ||
@@ -208,7 +259,7 @@ export function GloveFight() {
       hud.phase === "victory");
 
   const showMobileChrome = hud.isMobile || hud.platform === "mobile";
-  const inFight = playing || readying;
+  const inFight = playing || readying || tutorial;
   /** Quest / Pico / active WebXR — no flat "Enter ring" or webcam hands */
   const onHeadset =
     hud.xrHeadset ||
@@ -216,6 +267,10 @@ export function GloveFight() {
     hud.platform === "xr" ||
     // Belt-and-suspenders: if engine says immersive-vr works and device is not desktop-like
     (hud.xrSupported && hud.isMobile && typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || ""));
+  const showXrLaunch =
+    showOverlay &&
+    hud.phase === "menu" &&
+    (onHeadset || hud.xrSupported || hud.xrActive || hud.xrForce);
 
   return (
     <div
@@ -329,22 +384,24 @@ export function GloveFight() {
         />
       )}
 
-      {/* Readying gate */}
-      {readying && !hud.xrActive && (
+      {/* Readying / tutorial countdown */}
+      {(readying || (tutorial && hud.tutorialStep === "countdown")) && !hud.xrActive && (
         <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 p-6">
           <div className="w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-surface/88 px-6 py-5 text-center shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-md">
             <p className="text-xs font-semibold tracking-[0.2em] text-muted uppercase">
-              {hud.cameraHands ? "Calibrating track" : "Get ready"}
+              {tutorial ? "Here they come" : hud.cameraHands ? "Calibrating track" : "Get ready"}
             </p>
             <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
               {hud.countdown != null
                 ? hud.countdown
-                : hud.cameraHands
-                  ? "Show your upper body"
-                  : "Starting soon"}
+                : hud.message === "GO!"
+                  ? "GO!"
+                  : hud.cameraHands
+                    ? "Show your upper body"
+                    : "Starting soon"}
             </h2>
             <p className="mt-2 text-sm text-muted">
-              {hud.cameraHands
+              {tutorial ? "Punch the bad guys." : hud.cameraHands
                 ? "Stand back so chest and both hands are in the camera. Fight waits until the lock is solid."
                 : "Ease in — first wave starts slowly."}
             </p>
@@ -373,6 +430,48 @@ export function GloveFight() {
         </div>
       )}
 
+      {tutorial && hud.tutorialStep !== "countdown" && !hud.xrActive && (
+        <div className="pointer-events-none absolute inset-x-0 top-[12%] z-40 flex justify-center px-4">
+          <div className="w-full max-w-md rounded-[var(--radius-xl)] border border-amber-400/40 bg-surface/90 px-5 py-4 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-md">
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-amber-300 uppercase">
+              Tutorial
+            </p>
+            <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-amber-100">
+              {hud.tutorialTitle || "Lesson"}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-fg/90">{hud.tutorialBody}</p>
+            {!!hud.tutorialNeed && (
+              <div className="mt-3">
+                <p className="mb-1 text-[10px] font-bold tracking-[0.18em] text-amber-300 uppercase">
+                  {hud.tutorialStep === "wave" ? "Waveometer" : "Progress"}
+                </p>
+                <div className="mx-auto h-3 max-w-[16rem] overflow-hidden rounded-full border border-amber-400/40 bg-surface-2">
+                  <div
+                    className="h-full rounded-full transition-[width] duration-100"
+                    style={{
+                      width: `${Math.round(((hud.tutorialProgress || 0) / Math.max(0.001, hud.tutorialNeed || 1)) * 100)}%`,
+                      background: hud.tutorialWaving
+                        ? "linear-gradient(90deg, #3dd68c, #ffe08a)"
+                        : "linear-gradient(90deg, #c9a227, #ffe08a)",
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 text-sm font-bold tabular-nums text-amber-200">
+                  {hud.tutorialStep === "wave"
+                    ? `${(hud.tutorialProgress || 0).toFixed(1)} / 5.0 s`
+                    : `${hud.tutorialProgress || 0} / ${hud.tutorialNeed}`}
+                </p>
+              </div>
+            )}
+            {hud.tutorialHint && (
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                {hud.tutorialHint}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* In-fight HUD */}
       {inFight && !hud.xrActive && (
         <div className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-between p-3 sm:p-4">
@@ -390,18 +489,32 @@ export function GloveFight() {
                     x{hud.combo}
                   </span>
                 )}
+                <span
+                  className="ml-auto rounded-full border px-2 py-0.5 text-[10px] font-bold normal-case tracking-normal"
+                  style={{
+                    borderColor: hud.mpConnected ? "var(--color-hp)" : "var(--color-border)",
+                    color: hud.mpConnected ? "var(--color-hp)" : "var(--color-faint)",
+                  }}
+                >
+                  {hud.mpConnected
+                    ? `${hud.mpRoom || "arena"} · ${(hud.mpPeers || 0) + 1}`
+                    : "solo"}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-7 text-[10px] font-bold tracking-wider text-muted">HP</span>
-                <div className="h-2.5 flex-1 overflow-hidden rounded-full border border-border bg-surface-2">
+                <div className="h-2.5 flex-1 overflow-hidden rounded-full">
                   <div
                     className="h-full rounded-full transition-[width] duration-150"
                     style={{
                       width: `${hpPct}%`,
                       background:
                         hpPct < 30
-                          ? "var(--color-hp-low)"
-                          : "linear-gradient(90deg, #2aa86a, var(--color-hp))",
+                          ? "#ff2244"
+                          : hpPct < 62
+                            ? "#ffee22"
+                            : "linear-gradient(90deg, #14ff7a, #7dffb0)",
+                      boxShadow: "0 0 10px currentColor",
                     }}
                   />
                 </div>
@@ -421,6 +534,40 @@ export function GloveFight() {
                   />
                 </div>
               </div>
+              {(hud.mpGlow || 0) > 0.08 && (
+                <div className="flex items-center gap-2">
+                  <Heart className="size-3.5 shrink-0 text-punch" />
+                  <div className="h-2 flex-1 overflow-hidden rounded-full border border-border bg-surface-2">
+                    <div
+                      className="h-full rounded-full transition-[width] duration-100"
+                      style={{
+                        width: `${Math.round((hud.mpGlow || 0) * 100)}%`,
+                        background:
+                          (hud.mpGlow || 0) > 0.85
+                            ? "linear-gradient(90deg, var(--color-punch), var(--color-accent))"
+                            : "linear-gradient(90deg, #7a2048, var(--color-punch))",
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {(hud.walkSpeed || 0) > 0.02 && (
+                <div className="flex items-center gap-2">
+                  <Zap className="size-3.5 shrink-0 text-accent" />
+                  <div className="h-2 flex-1 overflow-hidden rounded-full border border-border bg-surface-2">
+                    <div
+                      className="h-full rounded-full transition-[width] duration-75"
+                      style={{
+                        width: `${Math.round((hud.walkSpeed || 0) * 100)}%`,
+                        background: "linear-gradient(90deg, #3aaa4c, #ffe08a)",
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-bold tabular-nums text-muted">
+                    {Math.round((hud.walkSpeed || 0) * 100)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -443,6 +590,9 @@ export function GloveFight() {
               <div className="pointer-events-auto flex flex-col gap-2">
                 <div className="flex gap-1.5">
                   {(["punch", "slap", "poke"] as HandMode[]).map((m) => {
+                    if (tutorial && hud.tutorialStep && hud.tutorialStep !== m && hud.tutorialStep !== "enter" && hud.tutorialStep !== "countdown") {
+                      return null;
+                    }
                     const Icon = MODE_ICON[m];
                     const active = hud.modeL === m || hud.modeR === m;
                     const both = hud.modeL === m && hud.modeR === m;
@@ -539,6 +689,16 @@ export function GloveFight() {
                 <div className="flex flex-col gap-2">
                   <button
                     type="button"
+                    onPointerDown={() => engineRef.current?.setWalkThrottle(true)}
+                    onPointerUp={() => engineRef.current?.setWalkThrottle(false)}
+                    onPointerLeave={() => engineRef.current?.setWalkThrottle(false)}
+                    className="flex size-12 items-center justify-center rounded-full border border-border bg-surface/90 text-accent shadow-lg active:scale-95"
+                    aria-label="Walkway throttle"
+                  >
+                    <Zap className="size-5" />
+                  </button>
+                  <button
+                    type="button"
                     onPointerDown={() => engineRef.current?.setCharging(true)}
                     onPointerUp={() => engineRef.current?.setCharging(false)}
                     onPointerLeave={() => engineRef.current?.setCharging(false)}
@@ -551,7 +711,8 @@ export function GloveFight() {
                     type="button"
                     onClick={() => engineRef.current?.doGesture("heart")}
                     className="flex size-12 items-center justify-center rounded-full border border-border bg-surface/90 text-punch shadow-lg active:scale-95"
-                    aria-label="Taunt"
+                    aria-label="Heart shield"
+                    hidden={!!tutorial && hud.tutorialStep !== "heart" && hud.tutorialStep !== "enter"}
                   >
                     <Heart className="size-5" />
                   </button>
@@ -561,17 +722,50 @@ export function GloveFight() {
 
             {!showMobileChrome && (
               <p className="text-center text-[11px] text-faint">
-                Click to lock · LMB / RMB punch · 1 2 3 modes · Space power · WASD move
+                Drag to look · Click to lock · LMB / RMB punch · 1 2 3 modes · H heart · M birdie · Space
+                power · WASD · Hold Shift = throttle the walkway
               </p>
             )}
           </div>
         </div>
       )}
 
-      {/* Menu / pause / end overlays */}
+      {/* Progressive boot — play / WebXR locked until the ring is fully loaded */}
+      {booting && (
+        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-bg px-5">
+          <div className="w-full max-w-md">
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-muted uppercase">
+              Loading
+            </p>
+            <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">Glove Fight</h1>
+            <p className="mt-2 text-sm text-muted">{hud.bootStep || "Waking the ring…"}</p>
+            <div className="mt-4 h-2 overflow-hidden rounded-full border border-border bg-surface-2">
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-200"
+                style={{ width: `${Math.round((hud.bootPct || 0) * 100)}%` }}
+              />
+            </div>
+            <p className="mt-1 text-right text-[11px] tabular-nums text-faint">
+              {Math.round((hud.bootPct || 0) * 100)}%
+            </p>
+            <ol className="mt-4 max-h-48 space-y-1 overflow-hidden font-mono text-[11px] leading-relaxed text-muted">
+              {(hud.bootLog || []).map((line, i) => (
+                <li key={`${i}-${line}`} className={i === (hud.bootLog?.length || 1) - 1 ? "text-fg" : ""}>
+                  <span className="text-faint">›</span> {line}
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      )}
+
       {showOverlay && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center overflow-y-auto bg-bg/55 p-4 backdrop-blur-[2px]">
-          <div className="animate-float-in my-auto w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface/92 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-start justify-center overflow-y-auto bg-bg/55 p-4 backdrop-blur-[2px]">
+          <div
+            data-panel
+            className="pointer-events-auto animate-float-in my-4 w-full max-w-md max-h-[min(92dvh,46rem)] overflow-y-auto rounded-[var(--radius-xl)] border border-border bg-surface/92 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            style={{ touchAction: "pan-y" }}
+          >
             {hud.phase === "menu" && (
               <>
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted uppercase">
@@ -580,9 +774,83 @@ export function GloveFight() {
                 <h1 className="mt-1 font-display text-4xl font-semibold tracking-tight">
                   Glove Fight
                 </h1>
+                {showXrLaunch && (
+                  <div className="mt-4 flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      {hud.xrDeviceName && (
+                        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-semibold text-fg">
+                          {hud.xrDeviceName}
+                        </span>
+                      )}
+                      <span
+                        className="rounded-full border bg-surface-2 px-2.5 py-1 font-semibold"
+                        style={{
+                          borderColor: hud.xrModeAr ? "var(--color-hp)" : "var(--color-border)",
+                          color: hud.xrModeAr ? "var(--color-hp)" : "var(--color-faint)",
+                        }}
+                      >
+                        AR {hud.xrModeAr ? "ok" : "no"}
+                      </span>
+                      <span
+                        className="rounded-full border bg-surface-2 px-2.5 py-1 font-semibold"
+                        style={{
+                          borderColor: hud.xrModeVr ? "var(--color-hp)" : "var(--color-border)",
+                          color: hud.xrModeVr ? "var(--color-hp)" : "var(--color-faint)",
+                        }}
+                      >
+                        VR {hud.xrModeVr ? "ok" : "no"}
+                      </span>
+                      {hud.xrRaysOff && (
+                        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-semibold text-muted">
+                          Hands on · rays off
+                        </span>
+                      )}
+                    </div>
+                    {(hud.xrModeVr || onHeadset || hud.xrForce) && hud.xrVendor !== "spectacles" && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          enterXR("vr");
+                        }}
+                        disabled={!!hud.xrActive || !!hud.xrEntering}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-accent-fg shadow-lg transition hover:brightness-110 active:scale-[0.98] disabled:opacity-60"
+                      >
+                        {hud.xrEntering && hud.xrPreferredMode !== "immersive-ar" ? (
+                          <Loader2 className="size-5 animate-spin" />
+                        ) : (
+                          <Glasses className="size-5" />
+                        )}
+                        {hud.xrActive && hud.xrSessionMode === "immersive-vr"
+                          ? "VR active"
+                          : hud.xrEntering
+                            ? "Entering VR…"
+                            : "Enter VR"}
+                      </button>
+                    )}
+                    {hud.xrModeAr && hud.xrVendor !== "vision-pro" && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          enterXR("ar");
+                        }}
+                        disabled={!!hud.xrActive || !!hud.xrEntering}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-surface-2 py-3 text-sm font-semibold text-fg shadow-md transition hover:text-fg disabled:opacity-60"
+                      >
+                        {hud.xrEntering && hud.xrPreferredMode === "immersive-ar" ? (
+                          <Loader2 className="size-5 animate-spin" />
+                        ) : (
+                          <Glasses className="size-5" />
+                        )}
+                        {hud.xrActive && hud.xrSessionMode === "immersive-ar" ? "AR active" : "Enter AR"}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Punch, slap, poke — Rock / Paper / Scissors. Use mouse, touch, gamepad, camera,
-                  or VR.
+                  Punch, slap, poke — Rock / Paper / Scissors. Drag to look around. Use mouse,
+                  touch, gamepad, camera, or VR.
                 </p>
                 <ul className="mt-4 space-y-2 text-sm">
                   <li className="flex items-start gap-2">
@@ -621,6 +889,30 @@ export function GloveFight() {
                       </span>
                     </li>
                   )}
+                  <li className="flex items-start gap-2">
+                    <Heart className="mt-0.5 size-4 shrink-0 text-punch" />
+                    <span>
+                      <strong className="text-fg">Half heart</strong> — make a C (thumb + index
+                      gap) on either hand. Each hand shows its half on its own. Bring the two
+                      pink halves close until they sparkle to fuse a shield.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Zap className="mt-0.5 size-4 shrink-0 text-accent" />
+                    <span>
+                      <strong className="text-fg">Walkway throttle</strong> — red SPEED ball on
+                      your right, idle is pushed back. Reach it and close your hand around the
+                      handle, then shove it forward to ride. Open your hand or pull away to let
+                      go — it springs back to zero.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-0.5 size-4 shrink-0 text-center text-sm leading-none">🐦</span>
+                    <span>
+                      <strong className="text-fg">Birdie</strong> — middle finger up.
+                      A flapping 3D bird pops onto that hand.
+                    </span>
+                  </li>
                 </ul>
 
                 {!onHeadset && (
@@ -672,7 +964,7 @@ export function GloveFight() {
                           <strong className="text-fg">swipe L/R</strong> for big screen gags.
                         </p>
                         <p className="mt-2 text-xs text-faint">
-                          Fist glove · Open fish · Index+middle blades
+                          Fist glove · Open fish · Index+middle blades · Middle-only bird
                         </p>
                         <p className="mt-1 text-sm font-semibold tabular-nums">
                           <span style={{ color: MODE_META[hud.modeL].css }}>
@@ -691,89 +983,89 @@ export function GloveFight() {
                   </>
                 )}
 
-                {(onHeadset || hud.xrSupported || hud.xrActive || hud.xrForce) && (
-                  <>
-                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-[11px]">
-                      {hud.xrDeviceName && (
-                        <span className="rounded-full border border-border px-2.5 py-1 font-semibold text-fg">
-                          {hud.xrDeviceName}
-                        </span>
-                      )}
-                      <span
-                        className="rounded-full border px-2.5 py-1 font-semibold"
-                        style={{
-                          borderColor: hud.xrModeAr ? "var(--color-hp)" : "var(--color-border)",
-                          color: hud.xrModeAr ? "var(--color-hp)" : "var(--color-faint)",
-                          background: hud.xrModeAr ? "rgba(61,214,140,0.1)" : "transparent",
-                        }}
-                      >
-                        AR {hud.xrModeAr ? "ok" : "no"}
+                <div className="mt-4 rounded-2xl border border-border bg-surface-2/80 px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+                      <Users className="size-4 text-punch" />
+                      Shared arena
+                    </p>
+                    <span
+                      className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+                      style={{
+                        borderColor: hud.mpConnected ? "var(--color-hp)" : "var(--color-border)",
+                        color: hud.mpConnected ? "var(--color-hp)" : "var(--color-faint)",
+                      }}
+                    >
+                      <Radio className="size-3" />
+                      {hud.mpConnected ? `${(hud.mpPeers || 0) + 1} online` : "offline"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                    Same room code = same fight. Make a half-heart; when two halves meet they glow,
+                    then become a shield.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-semibold tracking-wide text-muted uppercase">
+                        Room
                       </span>
-                      <span
-                        className="rounded-full border px-2.5 py-1 font-semibold"
-                        style={{
-                          borderColor: hud.xrModeVr ? "var(--color-hp)" : "var(--color-border)",
-                          color: hud.xrModeVr ? "var(--color-hp)" : "var(--color-faint)",
-                          background: hud.xrModeVr ? "rgba(61,214,140,0.1)" : "transparent",
-                        }}
-                      >
-                        VR {hud.xrModeVr ? "ok" : "no"}
+                      <input
+                        value={roomDraft}
+                        onChange={(e) => setRoomDraft(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && joinRoom()}
+                        spellCheck={false}
+                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                        placeholder="arena"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-semibold tracking-wide text-muted uppercase">
+                        Name
                       </span>
-                      {hud.xrRaysOff && (
-                        <span className="rounded-full border border-border px-2.5 py-1 font-semibold text-muted">
-                          Hands on · rays off
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-3 flex flex-col gap-2">
-                      {(hud.xrModeVr || onHeadset || hud.xrForce) && hud.xrVendor !== "spectacles" && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            // Pico only treats click (not pointerdown) as user activation
-                            e.preventDefault();
-                            enterXR("vr");
-                          }}
-                          disabled={!!hud.xrActive || !!hud.xrEntering}
-                          className={
-                            onHeadset
-                              ? "flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-accent-fg shadow-lg transition hover:brightness-110 active:scale-[0.98] disabled:opacity-60"
-                              : "flex w-full items-center justify-center gap-2 rounded-2xl border border-border py-2.5 text-sm font-semibold text-muted transition hover:text-fg disabled:opacity-60"
-                          }
-                        >
-                          {hud.xrEntering && hud.xrPreferredMode !== "immersive-ar" ? (
-                            <Loader2 className="size-5 animate-spin" />
-                          ) : (
-                            <Glasses className="size-5" />
-                          )}
-                          {hud.xrActive && hud.xrSessionMode === "immersive-vr"
-                            ? "VR active"
-                            : hud.xrEntering
-                              ? "Entering VR…"
-                              : "Enter VR"}
-                        </button>
-                      )}
-                      {hud.xrModeAr && hud.xrVendor !== "vision-pro" && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            enterXR("ar");
-                          }}
-                          disabled={!!hud.xrActive || !!hud.xrEntering}
-                          className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border py-2.5 text-sm font-semibold text-muted transition hover:text-fg disabled:opacity-60"
-                        >
-                          {hud.xrEntering && hud.xrPreferredMode === "immersive-ar" ? (
-                            <Loader2 className="size-5 animate-spin" />
-                          ) : (
-                            <Glasses className="size-5" />
-                          )}
-                          {hud.xrActive && hud.xrSessionMode === "immersive-ar" ? "AR active" : "Enter AR"}
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
+                      <input
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && joinRoom()}
+                        maxLength={24}
+                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                        placeholder="Fighter"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={joinRoom}
+                      className="flex-1 rounded-xl border border-border bg-surface py-2 text-xs font-semibold text-fg transition active:scale-[0.98]"
+                    >
+                      Join room
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyRoomLink}
+                      className="rounded-xl border border-border bg-surface px-3 py-2 text-xs font-semibold text-muted transition active:scale-[0.98]"
+                    >
+                      Copy link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.doGesture("heart")}
+                      className="flex items-center justify-center rounded-xl border border-border bg-surface px-3 py-2 text-punch transition active:scale-[0.98]"
+                      aria-label="Half heart pose"
+                    >
+                      <Heart className="size-4" />
+                    </button>
+                  </div>
+                  {hud.mpError && (
+                    <p className="mt-2 text-center text-[11px] text-danger">{hud.mpError}</p>
+                  )}
+                  {!!hud.mpPeerNames?.length && (
+                    <p className="mt-2 text-center text-[11px] text-muted">
+                      With you: {hud.mpPeerNames.join(", ")}
+                    </p>
+                  )}
+                </div>
+
                 {onHeadset && !hud.xrActive && !hud.xrEntering && (
                   <p className="mt-3 text-center text-xs text-muted">
                     {hud.xrVendor === "vision-pro" || hud.xrDeviceName?.includes("Vision")
@@ -800,6 +1092,62 @@ export function GloveFight() {
                   </span>
                   <span className="text-[11px] font-bold uppercase text-muted">{hud.xrForce ? "On" : "Off"}</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSkinnedHands(!hud.xrHandsOn)}
+                  className="mt-2 flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 text-left text-xs font-semibold"
+                  style={{
+                    borderColor: hud.xrHandsOn ? "var(--color-hp)" : "var(--color-border)",
+                    background: hud.xrHandsOn ? "rgba(61,214,140,0.1)" : "transparent",
+                    color: "var(--color-fg)",
+                  }}
+                  aria-pressed={!!hud.xrHandsOn}
+                >
+                  <span>
+                    Show skinned XR hands
+                    <span className="mt-0.5 block text-[10px] font-normal text-muted">
+                      Default on — real finger mesh plus punch / paper / scissors / heart
+                    </span>
+                  </span>
+                  <span className="text-[11px] font-bold uppercase text-muted">{hud.xrHandsOn ? "On" : "Off"}</span>
+                </button>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFxHitParticles(true)}
+                    className="flex flex-col items-start gap-1 rounded-2xl border px-3 py-2.5 text-left text-xs font-semibold"
+                    style={{
+                      borderColor: hud.fxHitParticles ? "var(--color-punch)" : "var(--color-border)",
+                      background: hud.fxHitParticles ? "rgba(226,61,61,0.1)" : "transparent",
+                      color: "var(--color-fg)",
+                    }}
+                    aria-pressed={!!hud.fxHitParticles}
+                  >
+                    <span>Projectile particles</span>
+                    <span className="text-[10px] font-normal text-muted">
+                      Spark dots behind the shot
+                    </span>
+                    <span className="text-[11px] font-bold uppercase text-muted">{hud.fxHitParticles ? "On" : "Off"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFxFlightTrail(true)}
+                    className="flex flex-col items-start gap-1 rounded-2xl border px-3 py-2.5 text-left text-xs font-semibold"
+                    style={{
+                      borderColor: hud.fxFlightTrail ? "var(--color-slap)" : "var(--color-border)",
+                      background: hud.fxFlightTrail ? "rgba(61,184,226,0.12)" : "transparent",
+                      color: "var(--color-fg)",
+                    }}
+                    aria-pressed={!!hud.fxFlightTrail}
+                  >
+                    <span>Projectile trails</span>
+                    <span className="text-[10px] font-normal text-muted">
+                      Default — ribbon behind the shot
+                    </span>
+                    <span className="text-[11px] font-bold uppercase text-muted">{hud.fxFlightTrail ? "On" : "Off"}</span>
+                  </button>
+                </div>
+                <p className="mt-1 text-[10px] text-faint">One in-flight look at a time. Hits always explode.</p>
                 {/* Only show after a real Enter-XR failure (not makeXRCompatible noise) */}
                 {!hud.xrActive && !!hud.xrLastError && (
                   <div className="mt-3 rounded-2xl border border-border bg-surface-2/90 px-3 py-3 text-center text-[11px] leading-relaxed text-muted">
@@ -866,7 +1214,7 @@ export function GloveFight() {
                 </button>
 
                 <p className="mt-5 text-center text-[11px] text-faint">
-                  Desktop · Mobile · Camera hands · WebXR · Gamepad
+                  Desktop · Mobile · Camera · WebXR · PartyKit
                   {hud.highScore > 0 ? ` · Best ${hud.highScore.toLocaleString()}` : ""}
                 </p>
               </>
