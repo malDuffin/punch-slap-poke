@@ -6286,8 +6286,7 @@ export class GloveFightEngine {
 		const loop = Math.max(1, Math.ceil(this.wave / LOOP_LEN));
 		const hp = type === "brawler" ? 42 + this.wave * 8 + (loop - 1) * 10 : type === "rusher" ? 24 + this.wave * 5 + (loop - 1) * 6 : 32 + this.wave * 6 + (loop - 1) * 8;
 		const bar = makeHpBar();
-		// Sit above the tallest RPS props (bags / scissors blades)
-		bar.position.y = type === "rusher" ? 2.05 : 1.95;
+		bar.position.y = 2.08;
 		mesh.add(bar);
 		this.entities.push({
 			id: this.idSeq++,

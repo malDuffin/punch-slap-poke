@@ -615,7 +615,29 @@ export function makeEnemy(
   g.userData.enemyVariant = variant;
   g.userData.enemyType = type;
   g.userData.damageStage = 0;
+  fitEnemyToPunchBagHeight(g);
   return g;
+}
+
+/**
+ * Punch-bag enemy is the size reference (~1.9 m, face at punching height).
+ * Other variants were shorter squat props — scale the art (not the root)
+ * so spawn-pop / squash on the root still work, and feet stay on the floor.
+ */
+const PUNCH_BAG_HEIGHT = 1.9;
+
+function fitEnemyToPunchBagHeight(root: THREE.Group) {
+  const inner = new THREE.Group();
+  inner.name = "enemyBody";
+  while (root.children.length) inner.add(root.children[0]);
+  root.add(inner);
+  inner.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(inner);
+  const h = box.max.y - box.min.y;
+  if (!(h > 0.05)) return;
+  const s = PUNCH_BAG_HEIGHT / h;
+  inner.scale.setScalar(s);
+  inner.position.y = -box.min.y * s;
 }
 
 function mat(
