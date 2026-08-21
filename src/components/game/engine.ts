@@ -1568,7 +1568,7 @@ export class GloveFightEngine {
 		const thumbDist = d(lt, rt);
 		const wristDist = d(lw, rw);
 		// Tips close, thumbs close — halves must actually meet (forgiving on camera)
-		if (indexDist > 0.12 || thumbDist > 0.14 || wristDist > 0.38) return false;
+		if (indexDist > 0.16 || thumbDist > 0.18 || wristDist > 0.48) return false;
 		// In image coords y grows downward — thumbs should be below index tips
 		const tipY = (li.y + ri.y) * 0.5;
 		const thY = (lt.y + rt.y) * 0.5;
@@ -1578,32 +1578,45 @@ export class GloveFightEngine {
 		return true;
 	}
 	detectTwoHandHeartXR(frame, refSpace, handL, handR) {
-		const joint = (hand, name) => {
+		const wp = (hand, name) => {
 			const j = hand.get?.(name) || hand.get(name);
 			if (!j) return null;
 			const pose = safeGetJointPose(frame, j, refSpace);
-			return pose ? pose.transform.position : null;
+			if (!pose) return null;
+			const p = pose.transform.position;
+			return this.xrRefToWorld(new THREE.Vector3(p.x, p.y, p.z));
 		};
-		const li = joint(handL, "index-finger-tip");
-		const ri = joint(handR, "index-finger-tip");
-		const lt = joint(handL, "thumb-tip");
-		const rt = joint(handR, "thumb-tip");
-		const lw = joint(handL, "wrist");
-		const rw = joint(handR, "wrist");
+		const li = wp(handL, "index-finger-tip");
+		const ri = wp(handR, "index-finger-tip");
+		const lt = wp(handL, "thumb-tip");
+		const rt = wp(handR, "thumb-tip");
+		const lw = wp(handL, "wrist");
+		const rw = wp(handR, "wrist");
 		if (!li || !ri || !lt || !rt || !lw || !rw) return false;
-		const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-		const midL = { x: (li.x + lt.x) * 0.5, y: (li.y + lt.y) * 0.5, z: (li.z + lt.z) * 0.5 };
-		const midR = { x: (ri.x + rt.x) * 0.5, y: (ri.y + rt.y) * 0.5, z: (ri.z + rt.z) * 0.5 };
-		const tips = d(li, ri);
-		const thumbs = d(lt, rt);
-		const centers = d(midL, midR);
-		const wrists = d(lw, rw);
-		// Together = C openings nearly meeting. Chest-width (~25cm+) still fails.
-		const joined = (tips < 0.11 && thumbs < 0.14) || centers < 0.13;
-		if (!joined || wrists > 0.34) return false;
-		const fingerY = Math.min(li.y, ri.y);
-		const thumbY = Math.min(lt.y, rt.y);
-		if (thumbY > fingerY - 0.012) return false;
+		const d = (a, b) => a.distanceTo(b);
+		const apL = d(li, lt);
+		const apR = d(ri, rt);
+		const ap = Math.max(0.05, 0.5 * (apL + apR));
+		const indexGap = d(li, ri);
+		const thumbGap = d(lt, rt);
+		const midL = li.clone().add(lt).multiplyScalar(0.5);
+		const midR = ri.clone().add(rt).multiplyScalar(0.5);
+		const centerGap = midL.distanceTo(midR);
+		// Join when the two C openings meet — no world-upright requirement
+		// (looking down at a heart used to fail the old thumbY < indexY test).
+		const tipsMeet = indexGap < Math.max(0.13, ap * 1.05) && thumbGap < Math.max(0.15, ap * 1.15);
+		const cupsMeet = centerGap < Math.max(0.12, ap * 0.9);
+		if (!tipsMeet && !cupsMeet) return false;
+		if (d(lw, rw) > 0.58) return false;
+		const openL = midL.clone().sub(lw);
+		const openR = midR.clone().sub(rw);
+		const toR = midR.clone().sub(midL);
+		if (openL.lengthSq() > 1e-6 && toR.lengthSq() > 1e-6 && openL.normalize().dot(toR.clone().normalize()) < -0.45) {
+			return false;
+		}
+		if (openR.lengthSq() > 1e-6 && toR.lengthSq() > 1e-6 && openR.normalize().dot(toR.clone().negate().normalize()) < -0.45) {
+			return false;
+		}
 		return true;
 	}
 	toggleMute() {
@@ -2311,43 +2324,51 @@ export class GloveFightEngine {
 		const key = this.handMeshKey(side);
 		const social = key === "thumbs" || key === "thumbsDown" || key === "peace" || key === "spock" || key === "rockOn";
 		if (key === "heart") {
-			const camPos = new THREE.Vector3();
-			this.camera.getWorldPosition(camPos);
-			const seat = (thumbTip && indexTip)
-				? thumbTip.clone().add(indexTip).multiplyScalar(0.5)
-				: wrist.clone().add(new THREE.Vector3(0, 0.06, 0));
-			const toCam = camPos.clone().sub(seat);
-			if (toCam.lengthSq() < 1e-8) toCam.set(0, 0, 1);
-			const worldUp = new THREE.Vector3(0, 1, 0);
-			let handUp = worldUp.clone();
-			if (indexM && pinkyM) {
-				const across = indexM.clone().sub(pinkyM);
-				const along = (midTip || midPip || indexM).clone().sub(wrist);
-				if (across.lengthSq() > 1e-8 && along.lengthSq() > 1e-8) {
-					handUp.crossVectors(across, along);
-					if (handUp.y < 0) handUp.negate();
-					if (handUp.lengthSq() > 1e-8) handUp.normalize();
-				}
-			}
-			const yAxis = worldUp.clone().lerp(handUp, 0.18);
-			if (yAxis.lengthSq() < 1e-8) yAxis.copy(worldUp);
-			yAxis.normalize();
-			let zAxis = toCam.clone();
-			zAxis.y *= 0.12;
-			if (zAxis.lengthSq() < 1e-8) zAxis.set(0, 0, 1);
-			zAxis.normalize();
-			const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis);
-			if (xAxis.lengthSq() < 1e-8) xAxis.set(1, 0, 0);
-			xAxis.normalize();
-			zAxis.crossVectors(xAxis, yAxis).normalize();
-			const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-			this.placeXrPropWorld(glove, seat, new THREE.Quaternion().setFromRotationMatrix(hm));
 			const bag = side === "L" ? this.xrGloveMeshesL : this.xrGloveMeshesR;
 			const heart = bag?.heart;
-			if (heart) {
-				const span = (thumbTip && indexTip) ? thumbTip.distanceTo(indexTip) : 0.08;
-				const s = THREE.MathUtils.clamp(span / 0.1, 0.9, 1.18);
-				heart.scale.setScalar((heart.userData.baseScale || this.xrPropWorldScale("heart")) * s);
+			if (thumbTip && indexTip && wrist) {
+				const span = Math.max(0.04, thumbTip.distanceTo(indexTip));
+				const yAxis = indexTip.clone().sub(thumbTip);
+				if (yAxis.lengthSq() < 1e-8) yAxis.set(0, 1, 0);
+				else yAxis.normalize();
+				const mid = thumbTip.clone().lerp(indexTip, 0.5);
+				// +X = C opening (away from the wrist, toward the other hand).
+				let xAxis = mid.clone().sub(wrist);
+				xAxis.addScaledVector(yAxis, -xAxis.dot(yAxis));
+				if (xAxis.lengthSq() < 1e-8) {
+					xAxis.crossVectors(yAxis, new THREE.Vector3(0, 0, 1));
+					if (xAxis.lengthSq() < 1e-8) xAxis.crossVectors(yAxis, new THREE.Vector3(1, 0, 0));
+				}
+				xAxis.normalize();
+				const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis);
+				if (zAxis.lengthSq() < 1e-8) zAxis.set(0, 0, 1);
+				else zAxis.normalize();
+				xAxis.crossVectors(yAxis, zAxis).normalize();
+				const camPos = new THREE.Vector3();
+				this.camera.getWorldPosition(camPos);
+				const towardCam = zAxis.dot(camPos.clone().sub(mid)) < 0 ? -1 : 1;
+				const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+				const q = new THREE.Quaternion().setFromRotationMatrix(hm);
+				this.placeXrPropWorld(glove, mid, q);
+				if (heart) {
+					heart.position.set(0, 0, 0.012 * towardCam);
+					heart.quaternion.identity();
+					heart.scale.setScalar(span * 1.08);
+				}
+			} else {
+				const camPos = new THREE.Vector3();
+				this.camera.getWorldPosition(camPos);
+				const seat = wrist.clone().add(new THREE.Vector3(0, 0.06, 0));
+				const toCam = camPos.clone().sub(seat);
+				if (toCam.lengthSq() < 1e-8) toCam.set(0, 0, 1);
+				toCam.normalize();
+				const yAxis = new THREE.Vector3(0, 1, 0);
+				const xAxis = new THREE.Vector3().crossVectors(yAxis, toCam);
+				if (xAxis.lengthSq() < 1e-8) xAxis.set(1, 0, 0);
+				xAxis.normalize();
+				const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
+				const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+				this.placeXrPropWorld(glove, seat, new THREE.Quaternion().setFromRotationMatrix(hm));
 			}
 			return;
 		}
@@ -2749,7 +2770,7 @@ export class GloveFightEngine {
 			const connected = bothHalves && this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR);
 			if (connected) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + Math.max(0.016, dt || 0.016);
-				if (this.heartDetectHold > 0.18) {
+				if (this.heartDetectHold > 0.12) {
 					this.spawnHeartShield();
 					this.heartDetectHold = -0.9;
 				}
@@ -7225,7 +7246,7 @@ export class GloveFightEngine {
 			if (modes?.R && modes.R !== this.modeR) this.applyHandMode("R", modes.R, false);
 			if (fr.hands?.length >= 2 && this.handGestureL === "heart" && this.handGestureR === "heart" && this.detectTwoHandHeartCam(fr.hands)) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + 0.032;
-				if (this.heartDetectHold > 0.18) {
+				if (this.heartDetectHold > 0.12) {
 					this.spawnHeartShield();
 					this.heartDetectHold = -0.9;
 				}

@@ -1530,75 +1530,77 @@ function heartMat(opacity = 0.92) {
   });
 }
 
-/** Classic heart outline, kept as a left or right lobe so one hand is a true half. */
-function halfHeartShape(side: "L" | "R"): THREE.Shape {
-  const s = new THREE.Shape();
-  const x = side === "L" ? -1 : 1;
-  s.moveTo(0, -0.17);
-  s.bezierCurveTo(x * 0.1, -0.08, x * 0.2, -0.01, x * 0.175, 0.07);
-  s.bezierCurveTo(x * 0.16, 0.17, x * 0.05, 0.19, 0, 0.09);
-  s.lineTo(0, -0.17);
-  return s;
+/**
+ * Left lobe of a classic heart, open edge on x=0, bulge toward −X,
+ * y from −0.5 (thumb) to +0.5 (index). Same local C for both hands —
+ * the hand frame aims +X at the opening (the other hand).
+ */
+function halfHeartCurvePoints(n = 32): THREE.Vector3[] {
+  const raw: THREE.Vector3[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = Math.PI + (Math.PI * i) / n;
+    const x = 16 * Math.sin(t) ** 3;
+    const y =
+      13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    raw.push(new THREE.Vector3(x, y, 0));
+  }
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of raw) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const h = Math.max(1e-6, maxY - minY);
+  return raw.map((p) => new THREE.Vector3(p.x / h, (p.y - minY) / h - 0.5, 0));
 }
 
-/** 3D half-heart. Shows on that hand alone — the other hand does not need to match. */
+function makeHeartOutlineTube(radius: number, mat: THREE.Material) {
+  const curve = new THREE.CatmullRomCurve3(halfHeartCurvePoints(32), false, "centripetal");
+  const geo = new THREE.TubeGeometry(curve, 48, radius, 7, false);
+  return new THREE.Mesh(geo, mat);
+}
+
+/** 3D half-heart outline — a C that sits on thumb + index, open toward the other hand. */
 export function makeHeartHalf(_palette: Palette, side: "L" | "R"): THREE.Group {
   const g = new THREE.Group();
   g.name = "heartHalf_" + side;
-  const solid = new THREE.MeshStandardMaterial({
-    color: 0xff2f72,
-    emissive: 0xff1458,
-    emissiveIntensity: 1.05,
-    roughness: 0.26,
-    metalness: 0.16,
+
+  const stroke = new THREE.MeshStandardMaterial({
+    color: 0xff4d8d,
+    emissive: 0xff2a6a,
+    emissiveIntensity: 1.15,
+    roughness: 0.22,
+    metalness: 0.18,
+    transparent: true,
+    opacity: 0.96,
+    depthWrite: false,
     side: THREE.DoubleSide,
   });
-  const geo = new THREE.ExtrudeGeometry(halfHeartShape(side), {
-    depth: 0.06,
-    bevelEnabled: true,
-    bevelThickness: 0.012,
-    bevelSize: 0.01,
-    bevelSegments: 2,
-    curveSegments: 20,
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xff7eb0,
+    transparent: true,
+    opacity: 0.32,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
   });
-  geo.center();
-  geo.rotateX(Math.PI);
-  geo.translate(0, 0.02, 0);
-  const body = new THREE.Mesh(geo, solid);
-  body.castShadow = true;
-  g.add(body);
 
-  const cut = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.06, 0.28),
-    new THREE.MeshStandardMaterial({
-      color: 0xffd4e8,
-      emissive: 0xff4d8d,
-      emissiveIntensity: 1.45,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.95,
-    }),
-  );
-  cut.position.set(side === "L" ? 0.014 : -0.014, 0.0, 0.0);
-  g.add(cut);
-
-  const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 12, 10),
-    new THREE.MeshBasicMaterial({
-      color: 0xff6aa8,
-      transparent: true,
-      opacity: 0.24,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-  glow.scale.set(1.1, 1.25, 0.58);
+  const glow = makeHeartOutlineTube(0.055, glowMat);
+  glow.name = "heartHalfGlow";
+  glow.renderOrder = 24;
   g.add(glow);
 
-  g.scale.setScalar(1.25);
+  const tube = makeHeartOutlineTube(0.028, stroke);
+  tube.name = "heartHalfStroke";
+  tube.renderOrder = 25;
+  g.add(tube);
+
+  g.scale.setScalar(0.2);
   g.userData.gesture = "heart";
-  g.userData.heartMats = [solid, cut.material as THREE.MeshStandardMaterial];
+  g.userData.heartMats = [stroke, glowMat];
   g.userData.heartHalo = glow;
+  g.userData.heartStroke = tube;
+  g.userData.poseSide = side;
   return g;
 }
 
