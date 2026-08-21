@@ -1049,7 +1049,7 @@ export class GloveFightEngine {
 		for (const side of ["L", "R"]) {
 			const g = side === "L" ? this.waveDemoL : this.waveDemoR;
 			if (!g) continue;
-			const sign = side === "L" ? -1 : 1;
+			const sign = side === "L" ? 1 : -1;
 			const waveAng = Math.sin(t * 4.2 + (side === "L" ? 0 : 0.9)) * 0.62;
 			const pos = camPos.clone()
 				.addScaledVector(fwd, dist)
