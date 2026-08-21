@@ -40,35 +40,40 @@ const FINGERS: Record<string, string[]> = {
   ],
 };
 
-/** Per-joint flexion (radians). Fingers: proximal / intermediate / distal. Thumb: mcp / proximal / distal. */
+/**
+ * Per-joint flexion (radians), applied on rest-pose local axes so parent
+ * rotation does not spin later joints around the palm (that was the claw /
+ * mirror-bend look). Fingers: MCP / PIP / intermediate / distal.
+ * Thumb: mcp / proximal / distal.
+ */
 const CURL: Record<string, Record<string, number[]>> = {
   punch: {
-    thumb: [1.0, 1.2, 0.95],
-    index: [1.45, 1.65, 1.25],
-    middle: [1.48, 1.68, 1.28],
-    ring: [1.4, 1.6, 1.2],
-    pinky: [1.35, 1.55, 1.15],
+    thumb: [0.45, 1.25, 0.75],
+    index: [1.1, 1.65, 1.5, 1.15],
+    middle: [1.15, 1.68, 1.52, 1.18],
+    ring: [1.05, 1.6, 1.45, 1.1],
+    pinky: [0.95, 1.5, 1.35, 1.05],
   },
   slap: {
     thumb: [0, 0, 0],
-    index: [0, 0, 0],
-    middle: [0, 0, 0],
-    ring: [0, 0, 0],
-    pinky: [0, 0, 0],
+    index: [0, 0, 0, 0],
+    middle: [0, 0, 0, 0],
+    ring: [0, 0, 0, 0],
+    pinky: [0, 0, 0, 0],
   },
   poke: {
-    thumb: [0.4, 0.5, 0.35],
-    index: [0, 0, 0],
-    middle: [0, 0, 0],
-    ring: [1.35, 1.55, 1.15],
-    pinky: [1.4, 1.6, 1.2],
+    thumb: [0.35, 0.55, 0.35],
+    index: [0, 0, 0, 0],
+    middle: [0, 0, 0, 0],
+    ring: [0.9, 1.5, 1.35, 1.1],
+    pinky: [0.95, 1.52, 1.38, 1.12],
   },
   heart: {
     thumb: [0.06, 0.1, 0.06],
-    index: [0.32, 0.48, 0.32],
-    middle: [0.85, 1.15, 0.85],
-    ring: [1.1, 1.35, 1.0],
-    pinky: [1.18, 1.42, 1.05],
+    index: [0.12, 0.32, 0.48, 0.32],
+    middle: [0.55, 0.85, 1.15, 0.85],
+    ring: [0.8, 1.1, 1.35, 1.0],
+    pinky: [0.9, 1.18, 1.42, 1.05],
   },
 };
 
@@ -141,24 +146,41 @@ function dummyPalmOut(dummies: Record<string, THREE.Object3D>) {
   return n.normalize();
 }
 
-/** Rotate `joint` so `next` folds toward the palm. Axis is local; parent chain then carries children. */
-function curlLocal(joint: THREE.Object3D, next: THREE.Object3D, palm: THREE.Vector3, angle: number) {
-  if (Math.abs(angle) < 1e-4) return;
-  joint.updateMatrixWorld(true);
-  next.updateMatrixWorld(true);
-  const jpos = new THREE.Vector3();
-  const npos = new THREE.Vector3();
-  joint.getWorldPosition(jpos);
-  next.getWorldPosition(npos);
-  const boneDir = npos.sub(jpos);
-  if (boneDir.lengthSq() < 1e-12) return;
-  const axisWorld = new THREE.Vector3().crossVectors(boneDir, palm);
-  if (axisWorld.lengthSq() < 1e-12) return;
-  axisWorld.normalize();
-  const inv = new THREE.Matrix4().copy(joint.matrixWorld).invert();
-  const axisLocal = axisWorld.clone().transformDirection(inv);
-  if (axisLocal.lengthSq() < 1e-12) return;
-  axisLocal.normalize();
+/**
+ * Rest-pose local flexion axis for every joint: boneDir × palm, expressed in
+ * that joint's bind local space. Using this frozen axis (instead of
+ * re-crossing after each parent curl) folds fingers onto the palm like a
+ * real fist instead of orbiting into a claw or a mirrored bend.
+ */
+function restFlexAxes(dummies: Record<string, THREE.Object3D>, palm: THREE.Vector3) {
+  const axes: Record<string, THREE.Vector3> = {};
+  for (const chain of Object.values(FINGERS)) {
+    for (let i = 0; i < chain.length - 1; i++) {
+      const joint = dummies[chain[i]];
+      const next = dummies[chain[i + 1]];
+      if (!joint || !next) continue;
+      joint.updateMatrixWorld(true);
+      next.updateMatrixWorld(true);
+      const jpos = new THREE.Vector3();
+      const npos = new THREE.Vector3();
+      joint.getWorldPosition(jpos);
+      next.getWorldPosition(npos);
+      const boneDir = npos.sub(jpos);
+      if (boneDir.lengthSq() < 1e-12) continue;
+      const axisWorld = new THREE.Vector3().crossVectors(boneDir, palm);
+      if (axisWorld.lengthSq() < 1e-12) continue;
+      axisWorld.normalize();
+      const inv = new THREE.Matrix4().copy(joint.matrixWorld).invert();
+      const axisLocal = axisWorld.clone().transformDirection(inv);
+      if (axisLocal.lengthSq() < 1e-12) continue;
+      axes[chain[i]] = axisLocal.normalize();
+    }
+  }
+  return axes;
+}
+
+function curlByRestAxis(joint: THREE.Object3D, axisLocal: THREE.Vector3 | undefined, angle: number) {
+  if (!joint || !axisLocal || Math.abs(angle) < 1e-4) return;
   joint.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(axisLocal, angle));
   joint.updateMatrixWorld(true);
 }
@@ -201,18 +223,14 @@ function applyGesturePose(root: THREE.Object3D, kind: string) {
   }
   dummyRoot.updateMatrixWorld(true);
 
-  // Palm normal must point OUT of the palm so (boneDir × palm) curls fingers INWARD.
-  // The geometric cross on this GLB often points the other way → negate.
-  let palm = dummyPalmOut(dummies).multiplyScalar(-1);
+  const palm = dummyPalmOut(dummies);
+  const axes = restFlexAxes(dummies, palm);
   for (const [finger, chain] of Object.entries(FINGERS)) {
     const angles = curls[finger] || [];
-    // For poke/scissors keep index+middle fully extended (start past them is already 0).
-    const start = finger === "thumb" ? 0 : 1;
     let k = 0;
-    for (let i = start; i < chain.length - 1 && k < angles.length; i++, k++) {
+    for (let i = 0; i < chain.length - 1 && k < angles.length; i++, k++) {
       const joint = dummies[chain[i]];
-      const next = dummies[chain[i + 1]];
-      if (joint && next) curlLocal(joint, next, palm, angles[k] || 0);
+      if (joint) curlByRestAxis(joint, axes[chain[i]], angles[k] || 0);
     }
   }
   dummyRoot.updateMatrixWorld(true);

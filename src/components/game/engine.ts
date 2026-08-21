@@ -869,28 +869,21 @@ export class GloveFightEngine {
 		let st = this[stKey];
 		const now = this.time || 0;
 		if (!st) {
-			st = this[stKey] = { t: now, twistAng: 0, samples: [] };
+			st = this[stKey] = { t: now, twistAng: 0, samples: [], lastMotionT: 0 };
 		}
 		const dt = Math.min(0.08, Math.max(0.008, now - (st.t || now)));
 		st.t = now;
-		const camFwd = new THREE.Vector3();
-		if (this.camera) {
-			this.camera.getWorldDirection(camFwd);
-			if (camFwd.lengthSq() < 1e-6) camFwd.set(0, 0, -1);
-		} else camFwd.set(0, 0, -1);
-		camFwd.normalize();
-		const right = new THREE.Vector3().crossVectors(camFwd, new THREE.Vector3(0, 1, 0));
-		if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
-		right.normalize();
-		const lat = vel.x * right.x + vel.y * right.y + vel.z * right.z;
-		const along = vel.x * camFwd.x + vel.y * camFwd.y + vel.z * camFwd.z;
+		// Pure world / tracker axes — never the headset. Projecting a still
+		// hand onto a yawing HMD looks like a bidirectional wave.
+		const lat = vel.x;
+		const along = vel.z;
 		const vert = vel.y;
 		st.twistAng = (st.twistAng || 0) + twistRate * dt;
-		const latPos = pos.x * right.x + pos.y * right.y + pos.z * right.z;
-		const alongPos = pos.x * camFwd.x + pos.y * camFwd.y + pos.z * camFwd.z;
 		st.samples = st.samples || [];
-		st.samples.push({ t: now, lat: latPos, vert: pos.y, along: alongPos, twist: st.twistAng });
-		while (st.samples.length && now - st.samples[0].t > 1.35) st.samples.shift();
+		st.samples.push({ t: now, lat: pos.x, vert: pos.y, along: pos.z, twist: st.twistAng });
+		const speed = Math.hypot(lat, along, vert);
+		if (speed > 0.12 || Math.abs(twistRate) > 0.35) st.lastMotionT = now;
+		while (st.samples.length && now - st.samples[0].t > 1.0) st.samples.shift();
 		const tick = (name, value, minVel, minTravel) => {
 			const signK = name + "Sign";
 			const travelK = name + "Travel";
@@ -909,7 +902,7 @@ export class GloveFightEngine {
 				st[travelK] = 0;
 			}
 			st[signK] = sign;
-			if (now - (st[lastK] || 0) > 1.35) {
+			if (now - (st[lastK] || 0) > 0.9) {
 				st[flipsK] = 0;
 				st[posK] = false;
 				st[negK] = false;
@@ -917,7 +910,7 @@ export class GloveFightEngine {
 			}
 		};
 		// One-way drift never counts. Need a real reverse on the same axis.
-		// lat = left/right, vert = elbow up/down, along = fore-aft, twist = wrist roll.
+		// lat = world X, vert = world Y, along = world Z, twist = wrist roll.
 		tick("lat", lat, 0.045, 0.016);
 		tick("vert", vert, 0.045, 0.016);
 		tick("along", along, 0.05, 0.02);
@@ -927,8 +920,8 @@ export class GloveFightEngine {
 	waveHistoryLive(st, name, minAmp) {
 		if (!st?.samples?.length) return false;
 		const now = this.time || 0;
-		const recent = st.samples.filter((s) => now - s.t < 1.2);
-		if (recent.length < 6) return false;
+		const recent = st.samples.filter((s) => now - s.t < 0.32);
+		if (recent.length < 4) return false;
 		let lo = Infinity, hi = -Infinity;
 		for (const s of recent) {
 			const v = s[name];
@@ -943,7 +936,7 @@ export class GloveFightEngine {
 			const d = recent[i][name] - recent[i - 1][name];
 			const dt = Math.max(1e-3, recent[i].t - recent[i - 1].t);
 			const v = d / dt;
-			const sign = v > 0.035 ? 1 : v < -0.035 ? -1 : 0;
+			const sign = v > 0.04 ? 1 : v < -0.04 ? -1 : 0;
 			travel += Math.abs(d);
 			if (sign && lastSign && sign !== lastSign && travel > minAmp * 0.2) {
 				flips++;
@@ -958,12 +951,15 @@ export class GloveFightEngine {
 		const now = this.time || 0;
 		const axisLive = (st, name) => {
 			if (!st) return false;
+			if (now - (st.lastMotionT || 0) > 0.12) return false;
 			const both = !!(st[name + "Pos"] && st[name + "Neg"]);
 			const flips = st[name + "Flips"] || 0;
 			const recent = now - (st[name + "LastT"] || 0) < 1.05;
 			return both && flips >= 2 && recent;
 		};
 		for (const st of [this.waveDetL, this.waveDetR, this.waveDetMouse]) {
+			if (!st) continue;
+			if (now - (st.lastMotionT || 0) > 0.12) continue;
 			if (axisLive(st, "lat") || axisLive(st, "vert") || axisLive(st, "along") || axisLive(st, "twist")) return true;
 			if (this.waveHistoryLive(st, "lat", 0.05)) return true;
 			if (this.waveHistoryLive(st, "vert", 0.05)) return true;
@@ -1184,7 +1180,7 @@ export class GloveFightEngine {
 			const waving = this.isCurrentlyWaving();
 			this.waveWaving = waving;
 			if (waving) this.waveMeter = Math.min(this.waveMeterMax, (this.waveMeter || 0) + dt);
-			else this.waveMeter = Math.max(0, (this.waveMeter || 0) - dt);
+			else this.waveMeter = Math.max(0, (this.waveMeter || 0) - dt * 3.0);
 			this.tutorialCount = this.waveMeter;
 			this.tutorialNeed = this.waveMeterMax;
 			if (this.waveMeter >= this.waveMeterMax - 0.0005 && !this.tutorialAdvanceAt) {
@@ -3122,7 +3118,7 @@ export class GloveFightEngine {
 		if (!prev || !prevT || now - prevT > 0.4) {
 			this[key] = cur;
 			this[tKey] = now;
-			this[qKey] = curQ.clone();
+			this[qKey] = (orient && !orient.isQuaternion) ? this.xrRefQuatToWorld(curQ) : curQ.clone();
 			// Don't hard-reset an active swing on a hitch — only if ancient
 			const sw0 = this[swingKey];
 			if (sw0 && now - sw0.armedAt > 0.55) this[swingKey] = null;
@@ -3134,17 +3130,28 @@ export class GloveFightEngine {
 		this[key] = cur;
 		this[tKey] = now;
 
-		const camFwd = new THREE.Vector3();
-		this.camera.getWorldDirection(camFwd);
-		if (camFwd.lengthSq() < 1e-6) camFwd.set(0, 0, -1);
-		camFwd.normalize();
+		// Motion axes from the hand / controller only — never the headset.
+		// WebXR joints: +Y along the bone toward the fingers, +X across the palm.
+		// XR controllers: −Z points forward. Fallback: world X / −Z.
 		const up = new THREE.Vector3(0, 1, 0);
-		const right = new THREE.Vector3().crossVectors(camFwd, up);
-		if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
-		right.normalize();
-
-		const along = vel.dot(camFwd);
-		const lateral = vel.dot(right);
+		let qWorld = curQ;
+		if (orient && !orient.isQuaternion) qWorld = this.xrRefQuatToWorld(curQ);
+		const isHandJoint = !!(orient && !orient.isQuaternion);
+		let handFwd;
+		let handAcross;
+		if (orient) {
+			handFwd = (isHandJoint ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, -1)).applyQuaternion(qWorld);
+			handAcross = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld);
+			if (handFwd.lengthSq() < 1e-6) handFwd.set(0, 0, -1);
+			else handFwd.normalize();
+			if (handAcross.lengthSq() < 1e-6) handAcross.crossVectors(handFwd, up);
+			else handAcross.normalize();
+		} else {
+			handFwd = new THREE.Vector3(0, 0, -1);
+			handAcross = new THREE.Vector3(1, 0, 0);
+		}
+		const along = vel.dot(handFwd);
+		const lateral = vel.dot(handAcross);
 		const speed = vel.length();
 		const latSpeed = Math.abs(lateral);
 
@@ -3154,14 +3161,12 @@ export class GloveFightEngine {
 		const prevQ = this[qKey];
 		if (prevQ && orient) {
 			const inv = prevQ.clone().invert();
-			const delta = inv.multiply(curQ);
+			const delta = inv.multiply(qWorld);
 			const w = THREE.MathUtils.clamp(delta.w, -1, 1);
 			const xyz = Math.hypot(delta.x, delta.y, delta.z);
 			const ang = 2 * Math.atan2(xyz, w);
 			angSpeed = Math.abs(ang) / dtPos;
 			// Signed twist around local Y (forearm / pronation-supination).
-			// Previous world-up sign was always + when the axis lined up with camFwd,
-			// so one-way wrist rolls never flipped.
 			let twistDelta = 2 * Math.atan2(delta.y, w);
 			if (twistDelta > Math.PI) twistDelta -= Math.PI * 2;
 			if (twistDelta < -Math.PI) twistDelta += Math.PI * 2;
@@ -3170,13 +3175,13 @@ export class GloveFightEngine {
 				const ax = new THREE.Vector3(delta.x / xyz, delta.y / xyz, delta.z / xyz);
 				const axisWorld = ax.applyQuaternion(prevQ);
 				rollRate = angSpeed * Math.max(
-					Math.abs(axisWorld.dot(camFwd)),
+					Math.abs(axisWorld.dot(handFwd)),
 					Math.abs(axisWorld.dot(up)) * 0.85,
 				);
 			}
-			this[qKey] = curQ.clone();
+			this[qKey] = qWorld.clone();
 		} else if (orient) {
-			this[qKey] = curQ.clone();
+			this[qKey] = qWorld.clone();
 		}
 
 		this.noteWaveMotion(side, cur, vel, twistRate);
