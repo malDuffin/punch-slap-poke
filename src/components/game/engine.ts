@@ -389,6 +389,7 @@ export class GloveFightEngine {
 	heartPoseActive = false;
 	heartConnectMesh = null;
 	heartWorldBeam = null;
+	heartCamBeam = null;
 	heartGlow = 0;
 	heartSeatL = null;
 	heartSeatR = null;
@@ -1603,7 +1604,8 @@ export class GloveFightEngine {
 	}
 	/** Two-hand heart → temporary damage shield. Optional world-space fuse point. */
 	spawnHeartShield(at = null) {
-		if (this.time < this.heartShieldCdUntil) {
+		const tutorialHeart = this.phase === "tutorial" && this.tutorialStep === "heart";
+		if (!tutorialHeart && this.time < this.heartShieldCdUntil) {
 			this.pushMsg("Shield cooling…", 0.7);
 			return;
 		}
@@ -1699,31 +1701,52 @@ export class GloveFightEngine {
 		const ri = wp(handR, "index-finger-tip") || this.heartTipIndexR;
 		const lt = wp(handL, "thumb-tip") || this.heartTipThumbL;
 		const rt = wp(handR, "thumb-tip") || this.heartTipThumbR;
-		if (this.heartSeatL && this.heartSeatR && this.heartSeatL.distanceTo(this.heartSeatR) < 0.42) return true;
+		const ha = this.heartHalfWorldPos("L");
+		const hb = this.heartHalfWorldPos("R");
+		if (ha && hb && ha.distanceTo(hb) < 0.88) return true;
 		if (!li || !ri || !lt || !rt) return false;
-		const d = (a, b) => a.distanceTo(b);
+		const d = (p, q) => p.distanceTo(q);
 		const indexGap = d(li, ri);
 		const thumbGap = d(lt, rt);
 		const cL = li.clone().add(lt).multiplyScalar(0.5);
 		const cR = ri.clone().add(rt).multiplyScalar(0.5);
 		const cupGap = d(cL, cR);
-		const tipsClose = indexGap < 0.38 && thumbGap < 0.42;
-		const cupsClose = cupGap < 0.38;
-		const onePairTouching = (indexGap < 0.22 || thumbGap < 0.22) && cupGap < 0.50;
-		return tipsClose || cupsClose || onePairTouching;
+		return (indexGap < 0.55 && thumbGap < 0.62) || cupGap < 0.72
+			|| ((indexGap < 0.32 || thumbGap < 0.32) && cupGap < 0.9);
+	}
+	heartHalfWorldPos(side) {
+		const mesh = this.heartMeshFor(side);
+		if (mesh && mesh.visible) {
+			const p = new THREE.Vector3();
+			mesh.updateWorldMatrix(true, false);
+			mesh.getWorldPosition(p);
+			if (p.lengthSq() > 1e-6) return p;
+		}
+		if (side === "L") return this.heartSeatL || this.worldHandPos("L");
+		return this.heartSeatR || this.worldHandPos("R");
+	}
+	heartHalvesShowing() {
+		const gestL = this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0);
+		const gestR = this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0);
+		const meshL = this.heartMeshFor("L");
+		const meshR = this.heartMeshFor("R");
+		return !!(gestL || (meshL && meshL.visible)) && !!(gestR || (meshR && meshR.visible));
 	}
 	heartHalvesJoined() {
-		const both = (this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0))
-			&& (this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0));
-		if (!both) return false;
-		if (this.heartSeatL && this.heartSeatR && this.heartSeatL.distanceTo(this.heartSeatR) < 0.42) return true;
+		if (!this.heartHalvesShowing()) return false;
+		const a = this.heartHalfWorldPos("L");
+		const b = this.heartHalfWorldPos("R");
+		if (a && b && a.distanceTo(b) < 0.88) return true;
+		const wl = this.worldHandPos("L");
+		const wr = this.worldHandPos("R");
+		if (wl && wr && wl.distanceTo(wr) < 0.62) return true;
 		const li = this.heartTipIndexL, ri = this.heartTipIndexR;
 		const lt = this.heartTipThumbL, rt = this.heartTipThumbR;
 		if (li && ri && lt && rt) {
-			if (li.distanceTo(ri) < 0.38 && lt.distanceTo(rt) < 0.42) return true;
+			if (li.distanceTo(ri) < 0.55 && lt.distanceTo(rt) < 0.62) return true;
 			const cL = li.clone().add(lt).multiplyScalar(0.5);
 			const cR = ri.clone().add(rt).multiplyScalar(0.5);
-			if (cL.distanceTo(cR) < 0.38) return true;
+			if (cL.distanceTo(cR) < 0.72) return true;
 		}
 		return false;
 	}
@@ -2972,14 +2995,16 @@ export class GloveFightEngine {
 		}
 		this.applyXrPointerPolicy();
 		this.applySkinnedHandVisibility();
-		if (frame && refSpace && xrHandL && xrHandR) {
-			const bothHalves = (this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0))
-				&& (this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0));
-			const connected = bothHalves && (this.heartHalvesJoined() || this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR));
+		if (frame && refSpace && (xrHandL || xrHandR)) {
+			const connected = this.heartHalvesJoined()
+				|| (xrHandL && xrHandR && this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR));
 			if (connected) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + Math.max(0.016, dt || 0.016);
-				if (this.heartDetectHold > 0.05) {
-					this.spawnHeartShield();
+				if (this.heartDetectHold > 0.04) {
+					const a = this.heartHalfWorldPos("L");
+					const b = this.heartHalfWorldPos("R");
+					const mid = a && b ? a.clone().add(b).multiplyScalar(0.5) : null;
+					this.spawnHeartShield(mid);
 					this.heartDetectHold = -0.9;
 				}
 			} else if ((this.heartDetectHold || 0) > 0) {
@@ -3995,9 +4020,12 @@ export class GloveFightEngine {
 		this.heartConnectMesh = this.makeHeartBeamMesh(0.012);
 		this.heartConnectMesh.visible = false;
 		this.overlayScene.add(this.heartConnectMesh);
-		this.heartWorldBeam = this.makeHeartBeamMesh(0.022);
+		this.heartWorldBeam = this.makeHeartBeamMesh(0.028);
 		this.heartWorldBeam.visible = false;
 		this.scene.add(this.heartWorldBeam);
+		this.heartCamBeam = this.makeHeartBeamMesh(0.028);
+		this.heartCamBeam.visible = false;
+		this.camera.add(this.heartCamBeam);
 		this.overlayScene.add(this.leftGlove);
 		this.overlayScene.add(this.rightGlove);
 		this.leftPos.copy(this.leftRest);
@@ -4063,38 +4091,42 @@ export class GloveFightEngine {
 	hideHeartConnector() {
 		if (this.heartConnectMesh) this.heartConnectMesh.visible = false;
 		if (this.heartWorldBeam) this.heartWorldBeam.visible = false;
+		if (this.heartCamBeam) this.heartCamBeam.visible = false;
 		this.heartGlow = 0;
 	}
 	makeHeartBeamMesh(radius) {
 		const g = new THREE.Group();
-		const mk = (r, color, opacity, order) => {
-			const m = new THREE.Mesh(
-				new THREE.CylinderGeometry(r, r, 1, 12),
-				new THREE.MeshBasicMaterial({
-					color,
-					transparent: true,
-					opacity,
-					depthWrite: false,
-					depthTest: false,
-					toneMapped: false,
-					blending: THREE.AdditiveBlending,
-					side: THREE.DoubleSide,
-				}),
-			);
-			m.renderOrder = order;
-			m.frustumCulled = false;
-			return m;
-		};
-		const halo = mk(radius * 2.6, 0xff9ec4, 0.22, 30);
-		const core = mk(radius, 0xff4d8d, 0.85, 31);
-		halo.name = "heartBeamHalo";
-		core.name = "heartBeamCore";
-		g.add(halo);
-		g.add(core);
-		g.userData.halo = halo;
-		g.userData.core = core;
+		g.name = "heartBeam";
 		g.frustumCulled = false;
-		g.renderOrder = 31;
+		g.renderOrder = 40;
+		const mat = (color, opacity) => new THREE.MeshBasicMaterial({
+			color,
+			transparent: true,
+			opacity,
+			depthWrite: false,
+			depthTest: false,
+			toneMapped: false,
+			blending: THREE.AdditiveBlending,
+			side: THREE.DoubleSide,
+		});
+		const ribbon = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat(0xff4d8d, 0.55));
+		ribbon.name = "heartBeamRibbon";
+		ribbon.renderOrder = 41;
+		ribbon.frustumCulled = false;
+		const glow = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), mat(0xffc0dd, 0.45));
+		glow.name = "heartBeamGlow";
+		glow.renderOrder = 42;
+		glow.frustumCulled = false;
+		const core = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.4, radius * 1.4, 1, 10), mat(0xff8ab8, 0.7));
+		core.name = "heartBeamCore";
+		core.renderOrder = 40;
+		core.frustumCulled = false;
+		g.add(ribbon);
+		g.add(core);
+		g.add(glow);
+		g.userData.ribbon = ribbon;
+		g.userData.core = core;
+		g.userData.glow = glow;
 		return g;
 	}
 	bindInput() {
@@ -5100,8 +5132,8 @@ export class GloveFightEngine {
 	heartPairGlow(a, b) {
 		if (!a || !b) return 0;
 		const d = a.distanceTo(b);
-		// Faint from ~1.0m, full when the C openings are nearly touching
-		return THREE.MathUtils.clamp(1 - (d - 0.06) / 0.94, 0, 1);
+		// Hot from ~0.9m, full when the C openings nearly close
+		return THREE.MathUtils.clamp(1 - (d - 0.05) / 1.05, 0, 1);
 	}
 	handsCloseForHeart() {
 		const a = this.worldHandPos("L");
@@ -5111,29 +5143,42 @@ export class GloveFightEngine {
 	}
 	placeHeartBeam(mesh, a, b, glow) {
 		if (!mesh || !a || !b) return;
-		const dist = Math.max(0.05, a.distanceTo(b));
+		const dist = Math.max(0.06, a.distanceTo(b));
 		const mid = a.clone().add(b).multiplyScalar(0.5);
 		mesh.position.copy(mid);
-		mesh.scale.set(1, dist, 1);
-		mesh.lookAt(b);
-		mesh.rotateX(Math.PI / 2);
 		mesh.visible = true;
+		const dir = b.clone().sub(a);
+		if (dir.lengthSq() < 1e-8) dir.set(1, 0, 0);
+		else dir.normalize();
+		const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+		mesh.quaternion.copy(quat);
+		mesh.scale.set(1, 1, 1);
 		const t = THREE.MathUtils.clamp(glow, 0, 1);
-		const color = t > 0.72 ? 0xffe8f4 : t > 0.4 ? 0xff8ab8 : 0xff4d8d;
-		const apply = (child, baseOp, extra) => {
+		const color = t > 0.7 ? 0xfff2f8 : t > 0.4 ? 0xff9ec4 : 0xff4d8d;
+		const paint = (child, op) => {
 			if (!child?.material) return;
-			child.material.opacity = baseOp + t * extra;
-			if (child.material.color) child.material.color.setHex(color);
 			child.visible = true;
+			child.material.opacity = op;
+			if (child.material.color) child.material.color.setHex(color);
 		};
-		if (mesh.userData?.core) {
-			apply(mesh.userData.core, 0.28, 0.7);
-			apply(mesh.userData.halo, 0.1, 0.55);
-			const fat = 0.7 + t * 2.2;
-			mesh.userData.core.scale.set(fat, 1, fat);
-			mesh.userData.halo.scale.set(fat * 1.15, 1, fat * 1.15);
-		} else if (mesh.material) {
-			mesh.material.opacity = 0.12 + t * 0.86;
+		const ribbon = mesh.userData.ribbon;
+		if (ribbon) {
+			ribbon.scale.set(dist, 0.07 + t * 0.13, 1);
+			paint(ribbon, 0.22 + t * 0.7);
+		}
+		const core = mesh.userData.core;
+		if (core) {
+			core.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+			core.scale.set(0.9 + t * 1.8, dist, 0.9 + t * 1.8);
+			paint(core, 0.2 + t * 0.65);
+		}
+		const ball = mesh.userData.glow;
+		if (ball) {
+			ball.scale.setScalar(0.55 + t * 2.2);
+			paint(ball, 0.18 + t * 0.7);
+		}
+		if (!ribbon && !core && mesh.material) {
+			mesh.material.opacity = 0.16 + t * 0.8;
 			if (mesh.material.color) mesh.material.color.setHex(color);
 		}
 	}
@@ -5142,15 +5187,14 @@ export class GloveFightEngine {
 		return side === "L" ? this.leftMeshes?.heart : this.rightMeshes?.heart;
 	}
 	updateHeartGlow(dt) {
-		const stickyL = this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0);
-		const stickyR = this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0);
-		const bothLocal = stickyL && stickyR;
+		const showing = this.heartHalvesShowing();
+		const bothLocal = showing;
 		const halves = [];
-		if (stickyL) {
-			halves.push({ who: "meL", local: true, side: "L", pos: this.heartSeatL || this.worldHandPos("L"), mesh: this.heartMeshFor("L") });
+		if (showing || this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0) || this.heartMeshFor("L")?.visible) {
+			halves.push({ who: "meL", local: true, side: "L", pos: this.heartHalfWorldPos("L"), mesh: this.heartMeshFor("L") });
 		}
-		if (stickyR) {
-			halves.push({ who: "meR", local: true, side: "R", pos: this.heartSeatR || this.worldHandPos("R"), mesh: this.heartMeshFor("R") });
+		if (showing || this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0) || this.heartMeshFor("R")?.visible) {
+			halves.push({ who: "meR", local: true, side: "R", pos: this.heartHalfWorldPos("R"), mesh: this.heartMeshFor("R") });
 		}
 		for (const rec of this.partyRemotes.values()) {
 			const st = this.party?.remotes.get(rec.id);
@@ -5212,8 +5256,8 @@ export class GloveFightEngine {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
 		}
-		const closeEnoughToShowBeam = bothLocal || (distPair < 1.1 && this.heartGlow > 0.015);
-		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.28) : this.heartGlow;
+		const closeEnoughToShowBeam = bothLocal || (distPair < 1.35 && this.heartGlow > 0.01);
+		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.35) : this.heartGlow;
 		if (closeEnoughToShowBeam) {
 			if (!this.xrActive && this.heartConnectMesh) {
 				this.placeHeartBeam(this.heartConnectMesh, this.leftPos.clone(), this.rightPos.clone(), displayGlow);
@@ -5222,25 +5266,36 @@ export class GloveFightEngine {
 			}
 			if (this.xrActive && this.heartWorldBeam) {
 				this.placeHeartBeam(this.heartWorldBeam, bestPair[0].pos, bestPair[1].pos, displayGlow);
-			} else if (!this.xrActive && this.heartWorldBeam) {
+			} else if (this.heartWorldBeam) {
 				this.heartWorldBeam.visible = false;
+			}
+			if (this.xrActive && this.heartCamBeam && this.camera) {
+				this.camera.updateWorldMatrix(true, false);
+				const la = bestPair[0].pos.clone();
+				const lb = bestPair[1].pos.clone();
+				this.camera.worldToLocal(la);
+				this.camera.worldToLocal(lb);
+				this.placeHeartBeam(this.heartCamBeam, la, lb, displayGlow);
+			} else if (this.heartCamBeam) {
+				this.heartCamBeam.visible = false;
 			}
 		} else {
 			if (this.heartConnectMesh) this.heartConnectMesh.visible = false;
 			if (this.heartWorldBeam) this.heartWorldBeam.visible = false;
+			if (this.heartCamBeam) this.heartCamBeam.visible = false;
 		}
 		const involvesRemote = !!(bestPair && (!bestPair[0].local || !bestPair[1].local));
-		const localTouch = bothLocal && distPair < 0.42;
-		const remoteTouch = involvesRemote && distPair < 0.22;
+		const localTouch = bothLocal && (distPair < 0.88 || this.heartHalvesJoined());
+		const remoteTouch = involvesRemote && distPair < 0.28;
 		if (localTouch || remoteTouch) {
 			this.heartDetectHold = (this.heartDetectHold || 0) + (dt || 0.016);
-			if (this.heartDetectHold > 0.05) {
+			if (this.heartDetectHold > 0.04) {
 				const mid = bestPair[0].pos.clone().add(bestPair[1].pos).multiplyScalar(0.5);
-				this.spawnHeartShield(involvesRemote ? mid : null);
+				this.spawnHeartShield(involvesRemote ? mid : mid);
 				this.heartDetectHold = -0.9;
 			}
 		} else if ((this.heartDetectHold || 0) > 0) {
-			this.heartDetectHold = Math.max(0, this.heartDetectHold - (dt || 0.016) * 3);
+			this.heartDetectHold = Math.max(0, this.heartDetectHold - (dt || 0.016) * 2);
 		}
 	}
 
