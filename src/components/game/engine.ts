@@ -6314,37 +6314,23 @@ export class GloveFightEngine {
 		this.spawnRing(pos.clone().add(new THREE.Vector3(0, .05, 0)), 16777215);
 	}
 	spawnHazard() {
-		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette, { simple: !!(this.xrHeadset || this.isMobile || this.xrTuning?.simpleCrates) });
-		const side = (Math.random() - .5) * 2.2;
-		const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-		const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-		const origin = this.getPlayerPos().clone().add(forward.multiplyScalar(9)).add(right.multiplyScalar(side));
-		origin.y = 1.2 + Math.random() * .6;
-		mesh.position.copy(origin);
-		this.scene.add(mesh);
-		const toPlayer = this.getPlayerPos().clone().sub(origin).normalize();
-		toPlayer.y += .1;
-		toPlayer.normalize();
-		this.entities.push({
-			id: this.idSeq++,
-			kind: "hazard",
-			mesh,
-			alive: true,
-			hp: 1,
-			maxHp: 1,
-			radius: .22,
-			vel: toPlayer.multiplyScalar(6.5 + this.wave * .35),
-			age: 0,
-			life: 5,
-			damage: 12,
-			enemyType: "brawler",
-			attackCd: 0,
-			flash: 0,
-			value: 50,
-			hand: null,
-			powered: false,
-			squash: 1
+		const player = this.getPlayerPos();
+		const living = [];
+		for (const e of this.entities) {
+			if (!e.alive || e.kind !== "enemy") continue;
+			if ((e.age || 0) < 0.45) continue;
+			const d = e.mesh.position.distanceTo(player);
+			living.push({ e, d, thrower: e.enemyType === "thrower" });
+		}
+		if (!living.length) return;
+		living.sort((a, b) => {
+			if (a.thrower !== b.thrower) return a.thrower ? -1 : 1;
+			const aOk = a.d > 2.2 && a.d < 16;
+			const bOk = b.d > 2.2 && b.d < 16;
+			if (aOk !== bOk) return aOk ? -1 : 1;
+			return b.d - a.d;
 		});
+		this.throwFromEnemy(living[0].e);
 	}
 	spawnPickup(pos) {
 		const mesh = makeStar(this.palette);
@@ -8272,13 +8258,18 @@ export class GloveFightEngine {
 		this.entities = this.entities.filter((e) => e.alive);
 	}
 	throwFromEnemy(e) {
+		if (!e?.alive || !e.mesh) return;
+		const player = this.getPlayerPos();
+		const origin = this.enemyThrowOrigin(e, player);
 		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette, { simple: !!(this.xrHeadset || this.isMobile || this.xrTuning?.simpleCrates) });
-		mesh.position.copy(e.mesh.position);
-		mesh.position.y = 1.25;
+		mesh.position.copy(origin);
 		this.scene.add(mesh);
-		const to = this.getPlayerPos().clone().sub(mesh.position).normalize();
-		to.y += .14;
+		const to = player.clone().sub(origin);
+		if (to.lengthSq() < 1e-6) to.set(0, 0, -1);
 		to.normalize();
+		to.y += 0.08;
+		to.normalize();
+		this.burst(origin, 0xc49a62, 6);
 		this.entities.push({
 			id: this.idSeq++,
 			kind: "hazard",
@@ -8297,8 +8288,21 @@ export class GloveFightEngine {
 			value: 60,
 			hand: null,
 			powered: false,
-			squash: 1
+			squash: 1,
+			thrownBy: e.id,
 		});
+	}
+	/** World point just above / behind the enemy's head, facing the player. */
+	enemyThrowOrigin(e, playerPos) {
+		const pos = e.mesh.position;
+		const origin = pos.clone();
+		origin.y += 1.72;
+		const away = pos.clone().sub(playerPos);
+		away.y = 0;
+		if (away.lengthSq() < 1e-6) away.set(0, 0, 1);
+		away.normalize();
+		origin.addScaledVector(away, 0.28);
+		return origin;
 	}
 	updateParticles(dt) {
 		const cap = this.xrTuning?.maxParticles ?? (this.xrActive ? 48 : 140);
