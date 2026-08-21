@@ -163,17 +163,7 @@ function fingerOpen(lm: NormalizedLandmark[], tip: number, pip: number, mcp: num
   const tipD = dist(wrist, t);
   const pipD = dist(wrist, p);
   const palm = dist(lm[5]!, lm[17]!) || 0.08;
-  // DIP if present (index 7, middle 11, ring 15, pinky 19)
-  const dipIdx = tip - 1;
-  const dip = lm[dipIdx];
-  let dipCos = -1;
-  if (dip) {
-    const dx = p.x - dip.x, dy = p.y - dip.y, dz = (p.z ?? 0) - (dip.z ?? 0);
-    const ex = t.x - dip.x, ey = t.y - dip.y, ez = (t.z ?? 0) - (dip.z ?? 0);
-    const dl = Math.hypot(dx, dy, dz), el = Math.hypot(ex, ey, ez);
-    if (dl > 1e-5 && el > 1e-5) dipCos = (dx * ex + dy * ey + dz * ez) / (dl * el);
-  }
-  return cos < -0.62 && dipCos < -0.4 && tipD > pipD * 1.14 && tipD > palm * 1.05;
+  return cos < -0.48 && tipD > pipD * 1.08 && tipD > palm * 0.95;
 }
 
 function fingerExtended(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
@@ -312,30 +302,24 @@ function classifyRps(lm: NormalizedLandmark[]): {
     return { gesture: "punch", mode: "punch", confidence: 0.9, label: "rock" };
   }
 
-  // Spock: four STRAIGHT fingers with a gap. Paper: 3–4 straight, together or spread.
+  // Spock only for a real Vulcan split. Modest spread is still paper.
   if (openCount >= 4) {
     const midTip = lm[12]!;
     const ringTip = lm[16]!;
+    const indexTip = lm[8]!;
+    const pinkyTip = lm[20]!;
     const gap = dist(midTip, ringTip);
+    const idxMid = dist(indexTip, midTip);
+    const ringPinky = dist(ringTip, pinkyTip);
     const palm = dist(lm[5]!, lm[17]!) || 0.08;
-    if (gap > palm * 0.55) {
+    const vulcan = gap > palm * 0.9 && gap > idxMid * 1.7 && gap > ringPinky * 1.7;
+    if (vulcan) {
       return { gesture: "spock", mode: null, confidence: 0.86, label: "spock" };
     }
     return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
   }
   if (openCount >= 3) {
     return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
-  }
-
-  // Spock: index+middle out, ring+pinky out, with a gap between middle and ring tips
-  if (index && middle && ring && pinky) {
-    const midTip = lm[12]!;
-    const ringTip = lm[16]!;
-    const gap = dist(midTip, ringTip);
-    const palm = dist(lm[5]!, lm[17]!) || 0.08;
-    if (gap > palm * 0.55) {
-      return { gesture: "spock", mode: null, confidence: 0.86, label: "spock" };
-    }
   }
 
   // Scissors already handled with a straight-finger test above.

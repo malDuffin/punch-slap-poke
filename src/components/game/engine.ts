@@ -1035,31 +1035,40 @@ export class GloveFightEngine {
 		this.camera.getWorldDirection(fwd);
 		if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
 		fwd.normalize();
-		const up = new THREE.Vector3(0, 1, 0);
-		const right = new THREE.Vector3().crossVectors(fwd, up);
+		const worldUp = new THREE.Vector3(0, 1, 0);
+		const right = new THREE.Vector3().crossVectors(fwd, worldUp);
 		if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
 		else right.normalize();
+		const viewUp = new THREE.Vector3().crossVectors(right, fwd);
+		if (viewUp.lengthSq() < 1e-6) viewUp.copy(worldUp);
+		else viewUp.normalize();
 		const t = this.time || 0;
-		const dist = this.xrActive ? 0.48 : 0.68;
+		const dist = this.xrActive ? 0.58 : 0.78;
 		for (const side of ["L", "R"]) {
 			const g = side === "L" ? this.waveDemoL : this.waveDemoR;
 			if (!g) continue;
 			const sign = side === "L" ? -1 : 1;
-			const wave = Math.sin(t * 4.6 + (side === "L" ? 0 : 0.85));
+			const waveAng = Math.sin(t * 4.2 + (side === "L" ? 0 : 0.9)) * 0.62;
 			const pos = camPos.clone()
 				.addScaledVector(fwd, dist)
-				.addScaledVector(right, sign * (0.18 + wave * 0.14))
-				.add(new THREE.Vector3(0, -0.1 + Math.cos(t * 4.6) * 0.03, 0));
-			const yAxis = new THREE.Vector3(sign * 0.08 + wave * 0.52, 0.72, -0.42).normalize();
-			let zAxis = camPos.clone().sub(pos);
-			if (zAxis.lengthSq() < 1e-8) zAxis.copy(fwd).negate();
-			zAxis.normalize();
+				.addScaledVector(right, sign * 0.26)
+				.addScaledVector(viewUp, -0.04);
+			const towardCam = camPos.clone().sub(pos);
+			if (towardCam.lengthSq() < 1e-8) towardCam.copy(fwd).negate();
+			towardCam.normalize();
+			// Generic-hand GLB: fingers along wrist −Z. Right palm +Y, left palm −Y.
+			const palmDir = side === "L" ? towardCam.clone().negate() : towardCam.clone();
+			let fingerDir = viewUp.clone().applyAxisAngle(towardCam, waveAng);
+			fingerDir.addScaledVector(palmDir, -fingerDir.dot(palmDir));
+			if (fingerDir.lengthSq() < 1e-8) fingerDir.copy(viewUp);
+			else fingerDir.normalize();
+			const zAxis = fingerDir.clone().negate();
+			const yAxis = palmDir.clone();
 			const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis);
 			if (xAxis.lengthSq() < 1e-8) xAxis.copy(right);
 			xAxis.normalize();
 			zAxis.crossVectors(xAxis, yAxis).normalize();
-			const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-			const q = new THREE.Quaternion().setFromRotationMatrix(hm);
+			const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
 			placePoseGuide(g, pos, q, 0);
 			g.visible = true;
 			g.traverse((o) => {
@@ -1069,9 +1078,9 @@ export class GloveFightEngine {
 					if (m.color) m.color.setHex(0xb7e4ff);
 					if (m.emissive) {
 						m.emissive.setHex(0x2a6aa8);
-						m.emissiveIntensity = 0.55;
+						m.emissiveIntensity = 0.7;
 					}
-					m.opacity = 0.5;
+					m.opacity = 0.62;
 					m.transparent = true;
 					m.depthWrite = false;
 				}
@@ -3034,10 +3043,10 @@ export class GloveFightEngine {
 			if (!tip || !pip) return false;
 			const mcpP = mcp || wrist;
 			const cos = bendCos(tip, pip, mcpP);
-			const dipCos = dip ? bendCos(tip, dip, pip) : -1;
 			const tipD = dist(wrist, tip);
 			const pipD = dist(wrist, pip);
-			return cos < -0.62 && dipCos < -0.4 && tipD > pipD * 1.14 && tipD > palm * 1.32;
+			// Straighter than a half-curl, but a natural open palm (together or spread) still counts.
+			return cos < -0.48 && tipD > pipD * 1.08 && tipD > palm * 1.18;
 		};
 		const fingerTucked = (tip, pip, mcp) => {
 			if (!tip) return true;
@@ -3139,10 +3148,14 @@ export class GloveFightEngine {
 			}
 		}
 
-		// Spock: all four STRAIGHT with a gap. Paper: 3–4 straight, together or spread.
+		// Paper: 3–4 straight fingers, together OR modestly spread.
+		// Spock only when middle↔ring is a real Vulcan split, not a relaxed open palm.
 		if (openCount >= 4) {
 			const gap = dist(middleTip, ringTip);
-			if (gap > palm * 0.55) return { mode: null, gesture: "spock", curl: n };
+			const idxMid = dist(indexTip, middleTip);
+			const ringPinky = pinkyTip ? dist(ringTip, pinkyTip) : 0;
+			const vulcan = gap > palm * 0.9 && gap > idxMid * 1.7 && gap > ringPinky * 1.7;
+			if (vulcan) return { mode: null, gesture: "spock", curl: n };
 			return { mode: "slap", gesture: "slap", curl: n };
 		}
 		if (openCount >= 3) return { mode: "slap", gesture: "slap", curl: n };
