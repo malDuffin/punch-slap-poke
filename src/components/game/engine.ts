@@ -69,6 +69,7 @@ import {
 	setForceXrEnabled,
 	resetXrDetectionCache,
 	pickXrReferenceSpace,
+	guessVendorPreSession,
 	type XrVendor,
 	type XrMode,
 	type XrProbe,
@@ -489,6 +490,7 @@ export class GloveFightEngine {
 	hudRoot = null;
 	dust = null;
 	ambientMotes = null;
+	ambientOrbs = [];
 	touchLookId = null;
 	touchLookLastX = 0;
 	touchLookLastY = 0;
@@ -581,7 +583,7 @@ export class GloveFightEngine {
 				}
 			}
 		} catch { /* */ }
-		this.xrVendorGuess = isAppleVisionProLikely() ? "vision-pro" : null;
+		this.xrVendorGuess = guessVendorPreSession() || (isAppleVisionProLikely() ? "vision-pro" : null);
 		this.xrDeviceName = this.xrHeadset ? friendlyHeadsetName(this.xrVendorGuess) : "";
 		this.platform = this.xrHeadset ? "xr" : this.isMobile ? "mobile" : "desktop";
 		this.reducedMotion = prefersReducedMotion();
@@ -590,30 +592,22 @@ export class GloveFightEngine {
 		this.power = 0;
 		this.powerSpin = 0;
 		this.charging = false;
-		this.quality = this.isMobile ? .85 : 1;
+		this.quality = this.xrHeadset ? .7 : this.isMobile ? .85 : 1;
 		this.renderer = new THREE.WebGLRenderer({
 			canvas,
-			antialias: !this.isMobile,
+			antialias: !this.isMobile && !this.xrHeadset,
 			alpha: true,
 			powerPreference: "high-performance",
 			stencil: false
 		});
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.6 : 2));
+		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile || this.xrHeadset ? 1.25 : 2));
 		this.renderer.shadowMap.enabled = true;
-		this.renderer.shadowMap.type = THREE.PCFShadowMap;
+		this.renderer.shadowMap.type = this.isMobile || this.xrHeadset ? THREE.BasicShadowMap : THREE.PCFShadowMap;
 		this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		this.renderer.toneMapping = this.xrHeadset ? THREE.LinearToneMapping : THREE.ACESFilmicToneMapping;
 		this.renderer.toneMappingExposure = 1.18;
 		this.renderer.autoClear = false;
 		this.renderer.setClearColor(0x0b0b0c, 1);
-		this.renderer.xr.enabled = true;
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.6 : 2));
-		this.renderer.shadowMap.enabled = true;
-		this.renderer.shadowMap.type = THREE.PCFShadowMap;
-		this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-		this.renderer.toneMappingExposure = 1.18;
-		this.renderer.autoClear = false;
 		this.renderer.xr.enabled = true;
 		try { this.renderer.xr.setReferenceSpaceType("local"); } catch { /* */ }
 		// Do NOT call makeXRCompatible on load — desktop GL throws InvalidStateError
@@ -773,7 +767,10 @@ export class GloveFightEngine {
 				const to = new Promise((_, rej) => setTimeout(() => rej(new Error("physics timeout")), 2500));
 				await Promise.race([phys, to]);
 				this.physicsReady = !!sharedPhysics.ready;
-				if (this.physicsReady) this.spawnFunBoxStacks();
+				if (this.physicsReady) {
+					if (this.xrHeadset || this.isMobile) sharedPhysics.applyHeadsetTune(16);
+					this.spawnFunBoxStacks();
+				}
 				this.pushBoot(this.physicsReady ? "Physics world ready" : "Physics still warming", 0.72);
 			} catch (err) {
 				console.warn("[physics] box3d.js failed to init", err);
@@ -1966,7 +1963,7 @@ export class GloveFightEngine {
 		}
 	}
 	applyXrDeviceTuning() {
-		const vendor = this.xrVendor || this.xrVendorGuess;
+		const vendor = this.xrVendor || this.xrVendorGuess || guessVendorPreSession() || (this.xrActive || this.xrHeadset ? "quest" : null);
 		const t = tuningForVendor(vendor);
 		this.xrTuning = t;
 		if (this.camera) {
@@ -1978,8 +1975,74 @@ export class GloveFightEngine {
 			this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, t.pixelRatioCap));
 		} catch { /* */ }
 		this.quality = t.quality;
+		if (t.trails === false) this.fxFlightTrail = false;
+		try {
+			this.renderer.toneMapping = t.cheapToneMap ? THREE.LinearToneMapping : THREE.ACESFilmicToneMapping;
+		} catch { /* */ }
+		if (this.sun) {
+			if (t.shadowMapSize <= 0) {
+				this.renderer.shadowMap.enabled = false;
+				this.sun.castShadow = false;
+			} else {
+				this.renderer.shadowMap.enabled = true;
+				this.renderer.shadowMap.type = THREE.BasicShadowMap;
+				this.sun.castShadow = true;
+				this.sun.shadow.mapSize.set(t.shadowMapSize, t.shadowMapSize);
+				this.sun.shadow.camera.left = -14;
+				this.sun.shadow.camera.right = 14;
+				this.sun.shadow.camera.top = 14;
+				this.sun.shadow.camera.bottom = -14;
+				this.sun.shadow.camera.far = 40;
+				try {
+					this.sun.shadow.map?.dispose();
+					this.sun.shadow.map = null;
+				} catch { /* */ }
+				this.sun.shadow.needsUpdate = true;
+			}
+		}
+		if (this.scene?.fog && this.scene.fog.isFogExp2) {
+			this.scene.fog.density = t.fogDensity;
+		}
+		if (t.cheapGlass && this.xrHudGlassMat) this.applyCheapHudGlass();
+		try { this.renderer.xr.setFoveation?.(t.foveation ?? 1); } catch { /* */ }
+		if (sharedPhysics.ready) sharedPhysics.applyHeadsetTune(t.physHertz);
+		this.applyXrShadowPolicy();
 		if (this.xrSession) applySessionDepth(this.xrSession, t.cameraFar, t.depthNear);
 		this.applyArPassthrough(this.xrSessionMode === "immersive-ar");
+	}
+	applyCheapHudGlass() {
+		const m = this.xrHudGlassMat;
+		if (!m) return;
+		m.transmission = 0;
+		m.thickness = 0;
+		m.clearcoat = 0;
+		m.iridescence = 0;
+		m.opacity = 0.38;
+		m.transparent = true;
+		m.metalness = 0.04;
+		m.roughness = 0.22;
+		m.normalMap = null;
+		if (m.normalScale) m.normalScale.set(0, 0);
+		m.needsUpdate = true;
+	}
+	/** Keep shadows only on large casters (ground, bags, trunks). Tiny props skip the shadow pass. */
+	applyXrShadowPolicy() {
+		if (!this.scene) return;
+		const shadowsOn = !!this.renderer.shadowMap.enabled;
+		this.scene.traverse((o) => {
+			if (!o.isMesh) return;
+			if (!shadowsOn) {
+				o.castShadow = false;
+				return;
+			}
+			const geo = o.geometry;
+			if (geo && !geo.boundingSphere) {
+				try { geo.computeBoundingSphere(); } catch { /* */ }
+			}
+			const r = geo?.boundingSphere?.radius || 0;
+			const sc = Math.max(Math.abs(o.scale.x), Math.abs(o.scale.y), Math.abs(o.scale.z), 1);
+			o.castShadow = r * sc >= 0.38;
+		});
 	}
 	/** Hide painted sky / fog so AR camera passthrough shows through. */
 	applyArPassthrough(on) {
@@ -2040,7 +2103,7 @@ export class GloveFightEngine {
 				m.transparent = true;
 				m.opacity = 0.4;
 				m.depthWrite = false;
-				m.side = THREE.DoubleSide;
+				m.side = THREE.FrontSide;
 				if (m.color) m.color.setHex(0xb7e4ff);
 				if ("emissive" in m) {
 					m.emissive.setHex(0x2a6aa8);
@@ -2048,7 +2111,7 @@ export class GloveFightEngine {
 				}
 			}
 			o.renderOrder = 24;
-			o.frustumCulled = false;
+			o.frustumCulled = true;
 			o.castShadow = false;
 		});
 	}
@@ -2255,8 +2318,8 @@ export class GloveFightEngine {
 		this.applyXrPointerPolicy();
 		this.xrHud = new THREE.Group();
 		this.xrHudCanvas = document.createElement("canvas");
-		this.xrHudCanvas.width = 768;
-		this.xrHudCanvas.height = 384;
+		this.xrHudCanvas.width = this.xrHeadset || this.isMobile ? 512 : 768;
+		this.xrHudCanvas.height = this.xrHeadset || this.isMobile ? 256 : 384;
 		this.xrHudTex = new THREE.CanvasTexture(this.xrHudCanvas);
 		this.xrHudTex.colorSpace = THREE.SRGBColorSpace;
 		this.xrHudMesh = new THREE.Mesh(
@@ -3730,14 +3793,14 @@ export class GloveFightEngine {
 		this.sun = new THREE.DirectionalLight(16769208, 1.45);
 		this.sun.position.set(12, 20, 6);
 		this.sun.castShadow = true;
-		const mapSize = this.isMobile ? 1024 : 2048;
+		const mapSize = this.isMobile || this.xrHeadset ? 512 : 2048;
 		this.sun.shadow.mapSize.set(mapSize, mapSize);
 		this.sun.shadow.camera.near = 1;
-		this.sun.shadow.camera.far = 55;
-		this.sun.shadow.camera.left = -22;
-		this.sun.shadow.camera.right = 22;
-		this.sun.shadow.camera.top = 22;
-		this.sun.shadow.camera.bottom = -22;
+		this.sun.shadow.camera.far = this.isMobile || this.xrHeadset ? 40 : 55;
+		this.sun.shadow.camera.left = this.isMobile || this.xrHeadset ? -14 : -22;
+		this.sun.shadow.camera.right = this.isMobile || this.xrHeadset ? 14 : 22;
+		this.sun.shadow.camera.top = this.isMobile || this.xrHeadset ? 14 : 22;
+		this.sun.shadow.camera.bottom = this.isMobile || this.xrHeadset ? -14 : -22;
 		this.sun.shadow.bias = -25e-5;
 		this.scene.add(this.sun);
 		const fill = new THREE.DirectionalLight(8956671, .32);
@@ -3762,15 +3825,16 @@ export class GloveFightEngine {
 		}
 		this.spawnArenaTrees();
 		for (let i = 0; i < 12; i++) {
-			const hill = new THREE.Mesh(new THREE.SphereGeometry(4.8 + Math.random() * 3.2, 16, 12), this.palette.hill);
+			const hill = new THREE.Mesh(new THREE.SphereGeometry(4.8 + Math.random() * 3.2, 10, 8), this.palette.hill);
 			hill.position.set((i - 5.5) * 6.2, -1.9, -50 - Math.random() * 12);
 			hill.scale.y = .4;
 			this.arenaRoot.add(hill);
 		}
-		for (let i = 0; i < 14; i++) {
+		const cloudN = this.isMobile || this.xrHeadset ? 8 : 14;
+		for (let i = 0; i < cloudN; i++) {
 			const cloud = new THREE.Group();
-			for (let c = 0; c < 4; c++) {
-				const p = new THREE.Mesh(new THREE.SphereGeometry(1.15 + Math.random() * .55, 12, 10), this.palette.cloud);
+			for (let c = 0; c < 3; c++) {
+				const p = new THREE.Mesh(new THREE.SphereGeometry(1.15 + Math.random() * .55, 8, 6), this.palette.cloud);
 				p.position.set(c * .95 - 1.2, Math.random() * .35, (Math.random() - .5) * .7);
 				p.scale.set(1.7, .55, 1.05);
 				cloud.add(p);
@@ -3778,12 +3842,14 @@ export class GloveFightEngine {
 			cloud.position.set((Math.random() - .5) * 55, 11 + Math.random() * 6, -6 - Math.random() * 48);
 			this.arenaRoot.add(cloud);
 		}
+		this.ambientOrbs = [];
 		for (let i = 0; i < 8; i++) {
-			const orb = new THREE.Mesh(new THREE.SphereGeometry(.12, 12, 10), i % 2 === 0 ? this.palette.neonGold : this.palette.neonCyan);
+			const orb = new THREE.Mesh(new THREE.SphereGeometry(.12, 8, 6), i % 2 === 0 ? this.palette.neonGold : this.palette.neonCyan);
 			orb.position.set((Math.random() - .5) * 5, 1.2 + Math.random() * 2, -2 - Math.random() * 8);
 			orb.userData.bob = Math.random() * Math.PI * 2;
 			orb.name = "ambientOrb";
 			this.arenaRoot.add(orb);
+			this.ambientOrbs.push(orb);
 		}
 		this.spawnFunBoxStacks();
 		this.spawnStartToys();
@@ -3801,7 +3867,7 @@ export class GloveFightEngine {
 		this.overlayScene.add(handRim);
 	}
 	buildDust() {
-		const n = this.isMobile ? 70 : 140;
+		const n = this.isMobile || this.xrHeadset ? 40 : 140;
 		const pos = new Float32Array(n * 3);
 		for (let i = 0; i < n; i++) {
 			pos[i * 3] = (Math.random() - .5) * 22;
@@ -3820,7 +3886,7 @@ export class GloveFightEngine {
 			blending: THREE.AdditiveBlending
 		}));
 		this.scene.add(this.dust);
-		const mn = this.isMobile ? 36 : 72;
+		const mn = this.isMobile || this.xrHeadset ? 20 : 72;
 		const mpos = new Float32Array(mn * 3);
 		for (let i = 0; i < mn; i++) {
 			mpos[i * 3] = (Math.random() - .5) * 8;
@@ -4397,6 +4463,7 @@ export class GloveFightEngine {
 		mesh.position.z = -0.01;
 		mesh.renderOrder = 19;
 		mesh.name = "xrHudGlass";
+		if (this.xrHeadset || this.isMobile) this.applyCheapHudGlass();
 		return mesh;
 	}
 	paintXrHud(force = false) {
@@ -4645,7 +4712,7 @@ export class GloveFightEngine {
 		this.waveKills = 0;
 		this.spawnQueue = [];
 		// Endless ramp: starts gentle, keeps getting denser (cap per-wave count only)
-		const count = n <= 1 ? 1 : n === 2 ? 2 : Math.min(12, 1 + Math.ceil(n * 0.7));
+		const count = n <= 1 ? 1 : n === 2 ? 2 : Math.min(this.xrActive || this.xrHeadset ? 8 : 12, 1 + Math.ceil(n * 0.7));
 		this.waveEnemies = count;
 		// Difficulty tier for messaging (loop 1 = waves 1–8, loop 2 = 9–16, …)
 		const loop = Math.max(1, Math.ceil(n / LOOP_LEN));
@@ -5077,7 +5144,7 @@ export class GloveFightEngine {
 				// slight row stagger for pyramid depth look
 				const z = cz + (level % 2 === 0 ? 0 : pitch * 0.08);
 				const tint = tints[(level + i + Math.floor(Math.abs(cx))) % tints.length];
-				const mesh = makeCrate(this.palette, { size, tint });
+				const mesh = makeCrate(this.palette, { size, tint, simple: !!(this.xrTuning?.simpleCrates || this.xrHeadset || this.isMobile) });
 				mesh.position.set(x, y, z);
 				mesh.rotation.y = (Math.random() - 0.5) * 0.06;
 				this.scene.add(mesh);
@@ -5127,8 +5194,16 @@ export class GloveFightEngine {
 		}
 		this.entities = this.entities.filter((e) => e.kind !== "funBox");
 
-		// === PLAYGROUND BEHIND PLAYER (+Z) — bigger pyramids ===
-		const behind = [
+		const lite = !!(this.xrTuning?.simpleCrates || this.xrHeadset || this.isMobile || this.xrActive);
+		const behind = lite
+			? [
+				{ x: 0.0, z: 3.4, base: 4, size: 0.34 },
+				{ x: -2.4, z: 2.8, base: 3, size: 0.32 },
+				{ x: 2.4, z: 2.8, base: 3, size: 0.32 },
+				{ x: -4.0, z: 2.2, base: 3, size: 0.3 },
+				{ x: 4.0, z: 2.2, base: 3, size: 0.3 },
+			]
+			: [
 			{ x: 0.0, z: 3.4, base: 6, size: 0.34 },
 			{ x: -2.4, z: 2.8, base: 5, size: 0.32 },
 			{ x: 2.4, z: 2.8, base: 5, size: 0.32 },
@@ -5140,8 +5215,14 @@ export class GloveFightEngine {
 			{ x: -3.2, z: 4.0, base: 3, size: 0.3 },
 			{ x: 3.2, z: 4.0, base: 3, size: 0.3 },
 		];
-		// Flanks (sides of pier path, clear of combat lane)
-		const flanks = [
+		const flanks = lite
+			? [
+				{ x: -3.9, z: -2.6, base: 3, size: 0.3 },
+				{ x: -4.1, z: -7.5, base: 3, size: 0.3 },
+				{ x: 3.9, z: -2.6, base: 3, size: 0.3 },
+				{ x: 4.1, z: -7.5, base: 3, size: 0.3 },
+			]
+			: [
 			{ x: -3.7, z: -0.4, base: 4, size: 0.3 },
 			{ x: -3.9, z: -2.6, base: 5, size: 0.3 },
 			{ x: -3.8, z: -5.0, base: 4, size: 0.28 },
@@ -6234,7 +6315,7 @@ export class GloveFightEngine {
 		this.spawnRing(pos.clone().add(new THREE.Vector3(0, .05, 0)), 16777215);
 	}
 	spawnHazard() {
-		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette);
+		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette, { simple: !!(this.xrHeadset || this.isMobile || this.xrTuning?.simpleCrates) });
 		const side = (Math.random() - .5) * 2.2;
 		const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
 		const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -6567,7 +6648,8 @@ export class GloveFightEngine {
 		return tex;
 	}
 	createLaceTrail(hexColor, opts = {}) {
-		const N = opts.count || 360;
+		const lite = this.xrActive || this.isMobile || this.xrTuning?.trails === false;
+		const N = opts.count || (lite ? 140 : 360);
 		const positions = new Float32Array(N * 3);
 		const colors = new Float32Array(N * 3);
 		const ages = new Float32Array(N);
@@ -6631,19 +6713,19 @@ export class GloveFightEngine {
 		const cur = worldPos.clone();
 		if (!lace.last) lace.last = cur.clone();
 		const dist = lace.last.distanceTo(cur);
-		// denser spacing = continuous lace (not chunky steps)
-		const spacing = 0.028 / (lace.emitBoost || 1);
-		const steps = Math.max(1, Math.min(48, Math.ceil(dist / spacing) || 1));
+		const pScale = this.xrTuning?.particleScale ?? (this.isMobile ? 0.6 : 1);
+		const lite = this.xrActive || this.isMobile || pScale < 0.85;
+		const spacing = (lite ? 0.07 : 0.028) / (lace.emitBoost || 1);
+		const maxSteps = lite ? 12 : 48;
+		const steps = Math.max(1, Math.min(maxSteps, Math.ceil(dist / spacing) || 1));
 		for (let s = 1; s <= steps; s++) {
 			const t = s / steps;
 			const x = lace.last.x + (cur.x - lace.last.x) * t;
 			const y = lace.last.y + (cur.y - lace.last.y) * t;
 			const z = lace.last.z + (cur.z - lace.last.z) * t;
-			// soft lateral jitter for ribbon body
-			const j = 0.012;
+			const j = lite ? 0.008 : 0.012;
 			this._spawnLaceParticle(lace, x + (Math.random() - 0.5) * j, y + (Math.random() - 0.5) * j, z + (Math.random() - 0.5) * j);
-			// second layer for thicker lace
-			if (s % 2 === 0) {
+			if (!lite && s % 2 === 0) {
 				this._spawnLaceParticle(lace, x + (Math.random() - 0.5) * j * 2, y + (Math.random() - 0.5) * j * 2, z + (Math.random() - 0.5) * j * 2);
 			}
 		}
@@ -7345,13 +7427,17 @@ export class GloveFightEngine {
 		return mesh;
 	}
 	burst(pos, color, n) {
-		const count = Math.ceil(n * (this.isMobile ? .6 : 1) * this.quality);
+		const pScale = this.xrTuning?.particleScale ?? (this.isMobile ? 0.6 : 1);
+		const cap = this.xrTuning?.maxParticles ?? (this.isMobile ? 80 : 140);
+		const room = Math.max(0, cap - this.particles.length);
+		const count = Math.min(room, Math.ceil(n * pScale * this.quality));
+		const lifeMul = this.xrActive ? 0.72 : 1;
 		for (let i = 0; i < count; i++) {
 			const mesh = this.allocParticle(color);
 			mesh.position.copy(pos);
 			mesh.scale.setScalar(.7 + Math.random() * 1.2);
 			this.scene.add(mesh);
-			const life = .35 + Math.random() * .5;
+			const life = (.35 + Math.random() * .5) * lifeMul;
 			this.particles.push({
 				mesh,
 				vel: new THREE.Vector3((Math.random() - .5) * 9, Math.random() * 7 + 1.5, (Math.random() - .5) * 9),
@@ -7378,7 +7464,7 @@ export class GloveFightEngine {
 		this.burst(at, 0xffffff, 10);
 		this.spawnRing(at, color);
 		const flash = new THREE.Mesh(
-			new THREE.SphereGeometry(0.22, 12, 10),
+			new THREE.SphereGeometry(0.22, 8, 6),
 			new THREE.MeshBasicMaterial({
 				color,
 				transparent: true,
@@ -7442,7 +7528,19 @@ export class GloveFightEngine {
 			this.fpsAcc = 0;
 			this.fpsFrames = 0;
 			if (this.xrActive) this.paintXrFpsHud();
-			if (this.fps < 40 && this.quality > .7) {
+			const xr = this.xrActive;
+			if (xr) {
+				if (this.fps < 58 && this.quality > 0.55) {
+					this.quality = Math.max(0.55, this.quality - 0.08);
+					try { this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.quality < 0.62 ? 0.85 : 1)); } catch { /* */ }
+					if (this.quality < 0.62 && this.sun) {
+						this.sun.castShadow = false;
+						this.renderer.shadowMap.enabled = false;
+					}
+				} else if (this.fps > 70 && this.quality < (this.xrTuning?.quality ?? 0.7)) {
+					this.quality = Math.min(this.xrTuning?.quality ?? 0.7, this.quality + 0.04);
+				}
+			} else if (this.fps < 40 && this.quality > .7) {
 				this.quality = .7;
 				this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
 				if (this.bloomPass) this.bloomPass.strength = this.isMobile ? .3 : .45;
@@ -7462,14 +7560,14 @@ export class GloveFightEngine {
 	};
 	update(dt) {
 		this.time += dt;
-		if (this.xrHudGlassMat?.normalMap) {
+		if (this.xrHudGlassMat?.normalMap && !this.xrTuning?.cheapGlass) {
 			this.xrHudGlassMat.normalMap.offset.set(this.time * 0.032, this.time * 0.021);
 		}
-		if (this.bloomPass) {
+		if (this.bloomPass && !this.xrActive) {
 			const target = this.isMobile ? .42 : .68;
 			this.bloomPass.strength += (target - this.bloomPass.strength) * (1 - Math.exp(-2.8 * dt));
 		}
-		if (this.juicePass) {
+		if (this.juicePass && !this.xrActive) {
 			const shake = this.trauma * this.trauma;
 			this.juicePass.uniforms.chroma.value = this.reducedMotion ? 0 : shake * 1.2;
 			this.juicePass.uniforms.time.value = this.time;
@@ -7481,13 +7579,11 @@ export class GloveFightEngine {
 			this.punchLight.intensity *= Math.max(0, 1 - dt * 14);
 			if (this.punchLightT <= 0) this.punchLight.intensity = 0;
 		}
-		this.arenaRoot.traverse((o) => {
-			if (o.name === "ambientOrb") {
-				const bob = o.userData.bob || 0;
-				o.position.y += Math.sin(this.time * 2 + bob) * .004;
-				o.rotation.y += dt * 1.5;
-			}
-		});
+		for (const orb of this.ambientOrbs) {
+			const bob = orb.userData.bob || 0;
+			orb.position.y += Math.sin(this.time * 2 + bob) * .004;
+			orb.rotation.y += dt * 1.5;
+		}
 		if (this.messageT > 0) {
 			this.messageT -= dt;
 			if (this.messageT <= 0) {
@@ -7498,9 +7594,11 @@ export class GloveFightEngine {
 		}
 		if (this.dust) {
 			this.dust.rotation.y += dt * .025;
-			const arr = this.dust.geometry.attributes.position.array;
-			for (let i = 0; i < arr.length; i += 3) arr[i + 1] += Math.sin(this.time + i) * .0025;
-			this.dust.geometry.attributes.position.needsUpdate = true;
+			if (!this.xrActive) {
+				const arr = this.dust.geometry.attributes.position.array;
+				for (let i = 0; i < arr.length; i += 3) arr[i + 1] += Math.sin(this.time + i) * .0025;
+				this.dust.geometry.attributes.position.needsUpdate = true;
+			}
 		}
 		if (this.ambientMotes) {
 			this.ambientMotes.position.copy(this.getPlayerPos());
@@ -7691,7 +7789,7 @@ export class GloveFightEngine {
 			if ((Math.floor(this.time * 8) % 2) === 0) this.applyClickGlow("R", true);
 		}
 		if (this.xrActive) {
-			this.paintXrHud(false);
+			if (this.phase !== "playing" || this.messageT > 0) this.paintXrHud(false);
 			if (this.xrFpsHud && !this.xrFpsHud.visible) this.paintXrFpsHud(true);
 		}
 		// Box3D Wasm step (crates / grenades / shots)
@@ -8026,9 +8124,15 @@ export class GloveFightEngine {
 					e.mesh.position.addScaledVector(toPlayer, speed * dt);
 				}
 				this.keepEnemyOnPath(e);
-				e.mesh.lookAt(playerPos.x, e.mesh.position.y, playerPos.z);
-				e.mesh.position.y = Math.sin(this.time * 5 + e.id) * .06;
-				if (e.bar) this.billboardYUp(e.bar);
+				const far = dist > 10;
+				if (e.bar) e.bar.visible = !far;
+				if (!far) {
+					e.mesh.lookAt(playerPos.x, e.mesh.position.y, playerPos.z);
+					e.mesh.position.y = Math.sin(this.time * 5 + e.id) * .06;
+					if (e.bar) this.billboardYUp(e.bar);
+				} else {
+					e.mesh.position.y = 0;
+				}
 				e.attackCd -= dt;
 				if (e.enemyType === "thrower" && e.attackCd <= 0 && dist < 14 && dist > 3) {
 					e.attackCd = 2.1;
@@ -8169,7 +8273,7 @@ export class GloveFightEngine {
 		this.entities = this.entities.filter((e) => e.alive);
 	}
 	throwFromEnemy(e) {
-		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette);
+		const mesh = Math.random() > .5 ? makeBottle(this.palette) : makeCrate(this.palette, { simple: !!(this.xrHeadset || this.isMobile || this.xrTuning?.simpleCrates) });
 		mesh.position.copy(e.mesh.position);
 		mesh.position.y = 1.25;
 		this.scene.add(mesh);
@@ -8198,6 +8302,14 @@ export class GloveFightEngine {
 		});
 	}
 	updateParticles(dt) {
+		const cap = this.xrTuning?.maxParticles ?? (this.xrActive ? 48 : 140);
+		if (this.particles.length > cap) {
+			const extra = this.particles.length - cap;
+			for (let k = 0; k < extra; k++) {
+				const old = this.particles[this.particles.length - 1 - k];
+				if (old) old.life = Math.min(old.life, 0.05);
+			}
+		}
 		for (let i = this.particles.length - 1; i >= 0; i--) {
 			const p = this.particles[i];
 			p.life -= dt;

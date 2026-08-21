@@ -358,33 +358,22 @@ export type DeviceTuning = {
   hidePointerRays: boolean;
   ignoreSelectForAttack: boolean;
   handTracking: boolean;
+  /** 0 disables shadows; otherwise square shadow-map size */
+  shadowMapSize: number;
+  particleScale: number;
+  /** Hard cap on live burst particles */
+  maxParticles: number;
+  cheapGlass: boolean;
+  /** 0–1 WebXR fixed foveation (1 = most savings) */
+  foveation: number;
+  cheapToneMap: boolean;
+  simpleCrates: boolean;
+  fogDensity: number;
+  /** Box3D contact Hertz; lower = cheaper solver */
+  physHertz: number;
 };
 
-export function tuningForVendor(vendor: XrVendor): DeviceTuning {
-  if (vendor === "vision-pro") {
-    return {
-      cameraFar: 1000,
-      depthNear: 0.1,
-      pixelRatioCap: 1.5,
-      quality: 0.75,
-      trails: false,
-      hidePointerRays: true,
-      ignoreSelectForAttack: true,
-      handTracking: true,
-    };
-  }
-  if (vendor === "spectacles") {
-    return {
-      cameraFar: 1000,
-      depthNear: 0.1,
-      pixelRatioCap: 1,
-      quality: 0.45,
-      trails: false,
-      hidePointerRays: true,
-      ignoreSelectForAttack: false,
-      handTracking: true,
-    };
-  }
+function baseTune(over: Partial<DeviceTuning>): DeviceTuning {
   return {
     cameraFar: 90,
     depthNear: 0.1,
@@ -394,7 +383,77 @@ export function tuningForVendor(vendor: XrVendor): DeviceTuning {
     hidePointerRays: false,
     ignoreSelectForAttack: false,
     handTracking: true,
+    shadowMapSize: 2048,
+    particleScale: 1,
+    maxParticles: 140,
+    cheapGlass: false,
+    foveation: 0,
+    cheapToneMap: false,
+    simpleCrates: false,
+    fogDensity: 0.018,
+    physHertz: 24,
+    ...over,
   };
+}
+
+export function tuningForVendor(vendor: XrVendor): DeviceTuning {
+  if (vendor === "vision-pro") {
+    return baseTune({
+      cameraFar: 1000,
+      pixelRatioCap: 1.5,
+      quality: 0.75,
+      trails: false,
+      hidePointerRays: true,
+      ignoreSelectForAttack: true,
+      shadowMapSize: 1024,
+      particleScale: 0.7,
+      maxParticles: 80,
+      cheapGlass: true,
+      foveation: 0.5,
+      cheapToneMap: true,
+      simpleCrates: true,
+      fogDensity: 0.012,
+      physHertz: 18,
+    });
+  }
+  if (vendor === "spectacles") {
+    return baseTune({
+      cameraFar: 1000,
+      pixelRatioCap: 1,
+      quality: 0.45,
+      trails: false,
+      hidePointerRays: true,
+      shadowMapSize: 0,
+      particleScale: 0.4,
+      maxParticles: 36,
+      cheapGlass: true,
+      foveation: 1,
+      cheapToneMap: true,
+      simpleCrates: true,
+      fogDensity: 0.02,
+      physHertz: 14,
+    });
+  }
+  // Quest / Pico / Vive — Quest 3 target 72 Hz
+  if (vendor === "quest" || vendor === "pico" || vendor === "vive") {
+    return baseTune({
+      cameraFar: 48,
+      depthNear: 0.08,
+      pixelRatioCap: 1,
+      quality: 0.7,
+      trails: false,
+      shadowMapSize: 512,
+      particleScale: 0.48,
+      maxParticles: 48,
+      cheapGlass: true,
+      foveation: 1,
+      cheapToneMap: true,
+      simpleCrates: true,
+      fogDensity: 0.03,
+      physHertz: 16,
+    });
+  }
+  return baseTune({});
 }
 
 export function applySessionDepth(session: XRSession, cameraFar: number, depthNear = 0.1): void {

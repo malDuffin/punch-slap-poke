@@ -29,7 +29,8 @@ const ROT: [number, number, number, number] = [0, 0, 0, 1];
 const VEL: [number, number, number] = [0, 0, 0];
 
 const FIXED_DT = 1 / 60;
-const MAX_STEPS_PER_FRAME = 3;
+const MAX_STEPS_PER_FRAME = 2;
+const MAX_SUBSTEPS = 3;
 
 export class Box3Physics {
   b3: B3 | null = null;
@@ -44,6 +45,8 @@ export class Box3Physics {
   awakeCount = 0;
   /** Skip mesh sync for sleeping crates */
   private skipSleepSync = true;
+  /** Contact Hertz (lower on Quest) */
+  private contactHertz = 24;
 
   async init(): Promise<void> {
     if (this.ready) return;
@@ -168,10 +171,9 @@ export class Box3Physics {
       return;
     }
 
-    // Adaptive substeps: calm stacks = 2, chaos = 3, extreme = 4
+    // Adaptive substeps: calm stacks = 2, chaos = 3 (never 4 — Quest budget)
     let sub = 2;
-    if (this.awakeCount > 40) sub = 3;
-    if (this.awakeCount > 90) sub = 4;
+    if (this.awakeCount > 50) sub = MAX_SUBSTEPS;
 
     let steps = 0;
     while (this.acc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
@@ -183,6 +185,17 @@ export class Box3Physics {
     if (this.acc > FIXED_DT * 2) this.acc = 0;
 
     this.awakeCount = b3.b3World_GetAwakeBodyCount?.(world) ?? this.awakeCount;
+  }
+
+  /** Drop solver stiffness on Quest-class devices (cheaper contacts, still stable stacks). */
+  applyHeadsetTune(hertz = 16) {
+    this.contactHertz = hertz;
+    if (!this.ready || !this.b3 || !this.world) return;
+    try {
+      this.b3.b3World_SetContactTuning?.(this.world, hertz, 7, 2.8);
+    } catch {
+      /* */
+    }
   }
 
   createBox(

@@ -170,6 +170,38 @@ export function createPalette() {
 
 export type Palette = ReturnType<typeof createPalette>;
 
+/** Shared crate geo/mat — hundreds of playground boxes, one buffer each size. */
+const _crateBoxGeo = new Map<string, THREE.BoxGeometry>();
+const _crateBandGeo = new Map<string, THREE.BoxGeometry>();
+const _crateTintMat = new Map<number, THREE.MeshStandardMaterial>();
+
+function crateBoxGeo(s: number) {
+  const k = s.toFixed(3);
+  let g = _crateBoxGeo.get(k);
+  if (!g) {
+    g = new THREE.BoxGeometry(s, s, s);
+    _crateBoxGeo.set(k, g);
+  }
+  return g;
+}
+function crateBandGeo(s: number) {
+  const k = s.toFixed(3);
+  let g = _crateBandGeo.get(k);
+  if (!g) {
+    g = new THREE.BoxGeometry(s * 1.06, s * 0.14, s * 1.06);
+    _crateBandGeo.set(k, g);
+  }
+  return g;
+}
+function crateTintMat(tint: number) {
+  let m = _crateTintMat.get(tint);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ color: tint, roughness: 0.86, metalness: 0.02 });
+    _crateTintMat.set(tint, m);
+  }
+  return m;
+}
+
 export function makeGlove(
   palette: Palette,
   side: "L" | "R",
@@ -185,7 +217,7 @@ export function makeGlove(
   const lace = palette.white;
 
   // Main padded fist body — classic boxing mitt silhouette
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 32, 24), mat);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), mat);
   body.scale.set(1.22, 1.02, 1.38);
   body.castShadow = true;
   g.add(body);
@@ -198,14 +230,14 @@ export function makeGlove(
 
   // Four knuckle domes
   for (let i = 0; i < 4; i++) {
-    const k = new THREE.Mesh(new THREE.SphereGeometry(0.048, 16, 14), mat);
+    const k = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 6), mat);
     k.position.set(-0.115 + i * 0.076, 0.125, 0.26);
-    k.castShadow = true;
+    k.castShadow = false;
     g.add(k);
   }
 
   // Thumb pouch
-  const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 14), mat);
+  const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), mat);
   thumb.scale.set(0.85, 0.9, 1.25);
   thumb.position.set(side === "L" ? -0.16 : 0.16, -0.02, 0.06);
   thumb.rotation.z = side === "L" ? 0.5 : -0.5;
@@ -213,7 +245,7 @@ export function makeGlove(
   g.add(thumb);
 
   // Wrist cuff / gauntlet
-  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.24, 20), palette.cuff);
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.24, 10), palette.cuff);
   cuff.rotation.x = Math.PI / 2;
   cuff.position.z = -0.2;
   cuff.castShadow = true;
@@ -316,12 +348,12 @@ export function makeFishHand(palette: Palette, side: "L" | "R", powered = false)
   });
 
   // Body elongated along +Z (nose +Z in art space)
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.17, 28, 20), bodyMat);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), bodyMat);
   body.scale.set(0.78, 0.72, 1.85);
   body.castShadow = true;
   art.add(body);
 
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 14), bellyMat);
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), bellyMat);
   belly.scale.set(0.7, 0.48, 1.4);
   belly.position.set(0, -0.055, 0.02);
   art.add(belly);
@@ -337,7 +369,7 @@ export function makeFishHand(palette: Palette, side: "L" | "R", powered = false)
     }
   }
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 20, 16), bodyMat);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), bodyMat);
   head.scale.set(0.9, 0.82, 1.1);
   head.position.z = 0.24;
   head.castShadow = true;
@@ -359,7 +391,7 @@ export function makeFishHand(palette: Palette, side: "L" | "R", powered = false)
 
   // Eyes on the +X flank (becomes camera-facing after orient)
   for (const sy of [-1, 1] as const) {
-    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.038, 14, 12), palette.white);
+    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 6), palette.white);
     eyeWhite.position.set(0.07, sy * 0.03, 0.28);
     art.add(eyeWhite);
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 10), palette.black);
@@ -622,7 +654,7 @@ function addFace(
     eyeG.name = side < 0 ? "eyeL" : "eyeR";
     eyeG.position.set(side * 0.16, 0.12, 0.02);
 
-    const whiteM = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), white);
+    const whiteM = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), white);
     whiteM.name = "eyeWhite";
     eyeG.add(whiteM);
 
@@ -640,7 +672,7 @@ function addFace(
     eyeG.add(shine);
 
     // Swollen black eye (hidden until damaged)
-    const blackEye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), bruise);
+    const blackEye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), bruise);
     blackEye.name = "blackEye";
     blackEye.visible = false;
     blackEye.scale.set(1.15, 0.85, 0.9);
@@ -806,14 +838,14 @@ function makePunchingBagEnemy(palette: Palette): THREE.Group {
   const wrap = mat(0x2a3038, { rough: 0.7 });
 
   // Main bag body
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.72, 8, 16), leather);
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.72, 5, 10), leather);
   body.position.y = 0.95;
   body.castShadow = true;
   body.receiveShadow = true;
   g.add(body);
 
   // Top cap
-  const top = new THREE.Mesh(new THREE.SphereGeometry(0.4, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.5), leatherDark);
+  const top = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), leatherDark);
   top.position.y = 1.45;
   top.scale.y = 0.55;
   g.add(top);
@@ -1132,14 +1164,14 @@ export function makeGrenade(palette: Palette, powered = false): THREE.Group {
     emissiveIntensity: 0.35,
   });
 
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.13, 18, 14), bodyMat);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), bodyMat);
   body.scale.set(1, 1.15, 1);
   body.castShadow = true;
   g.add(body);
 
   // pineapple ridges
-  for (let i = 0; i < 6; i++) {
-    const ridge = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.012, 6, 20), bodyMat);
+  for (let i = 0; i < 4; i++) {
+    const ridge = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.012, 5, 10), bodyMat);
     ridge.position.y = -0.08 + i * 0.035;
     ridge.scale.set(1, 1, 0.85);
     g.add(ridge);
@@ -1195,47 +1227,29 @@ export function makeBottle(palette: Palette): THREE.Group {
   return g;
 }
 
-export function makeCrate(palette: Palette, opts: { size?: number; tint?: number } = {}): THREE.Group {
+export function makeCrate(palette: Palette, opts: { size?: number; tint?: number; simple?: boolean } = {}): THREE.Group {
   const g = new THREE.Group();
   const s = opts.size ?? 0.34;
-  const wood = opts.tint
-    ? new THREE.MeshStandardMaterial({
-        color: opts.tint,
-        roughness: 0.86,
-        metalness: 0.02,
-      })
-    : palette.wood;
-  const dark = palette.woodDark;
-  const box = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), wood);
-  box.castShadow = true;
-  box.receiveShadow = true;
+  const wood = opts.tint ? crateTintMat(opts.tint) : palette.wood;
+  const box = new THREE.Mesh(crateBoxGeo(s), wood);
+  // Simple crates (Quest): one box, no extra draw calls, no shadow
+  box.castShadow = !opts.simple;
+  box.receiveShadow = !opts.simple;
   g.add(box);
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(s * 1.06, s * 0.14, s * 1.06), dark);
+  if (opts.simple) return g;
+  const dark = palette.woodDark;
+  const edge = new THREE.Mesh(crateBandGeo(s), dark);
   edge.position.y = s * 0.44;
   g.add(edge);
   const edge2 = edge.clone();
   edge2.position.y = -s * 0.44;
   g.add(edge2);
-  // X brace
-  const brace = new THREE.Mesh(new THREE.BoxGeometry(s * 1.06, s * 0.09, s * 0.12), dark);
-  brace.rotation.z = 0.7;
-  g.add(brace);
-  const brace2 = brace.clone();
-  brace2.rotation.z = -0.7;
-  g.add(brace2);
-  // Side stencil mark for variety
-  const mark = new THREE.Mesh(
-    new THREE.PlaneGeometry(s * 0.35, s * 0.22),
-    new THREE.MeshBasicMaterial({ color: 0x2a2018, transparent: true, opacity: 0.45 }),
-  );
-  mark.position.set(0, 0.02, s * 0.51);
-  g.add(mark);
   return g;
 }
 
 export function makeStar(palette: Palette): THREE.Group {
   const g = new THREE.Group();
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 1), palette.star);
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 0), palette.star);
   core.castShadow = true;
   g.add(core);
   for (let i = 0; i < 5; i++) {
@@ -1246,7 +1260,7 @@ export function makeStar(palette: Palette): THREE.Group {
     g.add(spike);
   }
   const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.42, 18, 14),
+    new THREE.SphereGeometry(0.42, 10, 8),
     new THREE.MeshBasicMaterial({
       color: 0xffd24a,
       transparent: true,
@@ -1343,7 +1357,7 @@ export function makeHpBar(): THREE.Group {
 }
 
 export function makeSkyDome(): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(70, 48, 24);
+  const geo = new THREE.SphereGeometry(70, 24, 12);
   const colors = new Float32Array(geo.attributes.position.count * 3);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
@@ -1913,10 +1927,10 @@ export function makeGumballMachine(): THREE.Group {
 
   const candy = new THREE.Group();
   candy.name = "candy";
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 10; i++) {
     const col = GUMBALL_COLORS[i % GUMBALL_COLORS.length];
     const b = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), mat(col, { rough: 0.25, metal: 0.15, em: 0.1, emCol: col }));
-    const a = (i / 18) * Math.PI * 2;
+    const a = (i / 10) * Math.PI * 2;
     const r = 0.11 + (i % 3) * 0.03;
     b.position.set(Math.cos(a) * r, 0.72 + (i % 5) * 0.07, Math.sin(a) * r);
     candy.add(b);
@@ -1924,7 +1938,7 @@ export function makeGumballMachine(): THREE.Group {
   root.add(candy);
 
   const globe = new THREE.Mesh(
-    new THREE.SphereGeometry(0.32, 20, 16),
+    new THREE.SphereGeometry(0.32, 12, 10),
     new THREE.MeshStandardMaterial({
       color: 0xc8f0ff,
       roughness: 0.08,
@@ -2023,9 +2037,9 @@ export function makeArenaTree(palette: Palette, seed = 1): THREE.Group {
   const canopy = new THREE.Group();
   canopy.name = "canopy";
   const crownY = trunkH + 0.15;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 3; i++) {
     const clump = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.42 + rnd(10 + i) * 0.22, 1),
+      new THREE.IcosahedronGeometry(0.42 + rnd(10 + i) * 0.22, 0),
       leafClusterMat(palette, i),
     );
     clump.position.set((rnd(20 + i) - 0.5) * 0.55, crownY + rnd(30 + i) * 0.45, (rnd(40 + i) - 0.5) * 0.55);
@@ -2232,7 +2246,7 @@ export function makeSpeedLever(_palette: Palette): THREE.Group {
   stick.position.y = 0.2;
   stick.castShadow = true;
   pivot.add(stick);
-  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.11, 20, 16), grip);
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), grip);
   handle.position.y = 0.42;
   handle.castShadow = true;
   handle.name = "leverHandle";
