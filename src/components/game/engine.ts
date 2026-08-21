@@ -1616,7 +1616,7 @@ export class GloveFightEngine {
 			this.leftRest.set(-0.22, -0.06, -0.58);
 			this.rightRest.set(0.22, -0.06, -0.58);
 		}
-		if (this.heartConnectMesh) this.heartConnectMesh.visible = true;
+		// Connector is driven only by updateHeartGlow when both halves are actively detected.
 	}
 	exitHeartPose() {
 		if (!this.heartPoseActive) return;
@@ -1830,11 +1830,8 @@ export class GloveFightEngine {
 	}
 	heartHalvesShowing() {
 		if (this.time < (this.heartHalfHideUntil || 0)) return false;
-		const gestL = this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0);
-		const gestR = this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0);
-		const meshL = this.heartMeshFor("L");
-		const meshR = this.heartMeshFor("R");
-		return !!(gestL || (meshL && meshL.visible)) && !!(gestR || (meshR && meshR.visible));
+		// Both half-hearts must be actively detected — sticky / leftover mesh never counts.
+		return this.handGestureL === "heart" && this.handGestureR === "heart";
 	}
 	heartHalvesJoined() {
 		if (!this.heartHalvesShowing()) return false;
@@ -3128,40 +3125,34 @@ export class GloveFightEngine {
 			this[heartFramesKey] = 0;
 			this[kindKey] = null;
 			this[holdKey] = 0;
+			const stickyKeyLock = side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
+			this[stickyKeyLock] = 0;
 			const curG = side === "L" ? this.handGestureL : this.handGestureR;
 			if (curG) this.setHandGesture(side, null);
+			this.heartPoseActive = false;
+			this.hideHeartConnector();
 			this.holdXRHandMode(side, lock);
 			return;
 		}
 		const stickyKey = side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
-		const otherStickyKey = side === "L" ? "heartStickyUntilR" : "heartStickyUntilL";
-		const otherGesture = side === "L" ? this.handGestureR : this.handGestureL;
 		const g = cls?.gesture;
-		const selfWasHeart = this[kindKey] === "heart" || (this[heartFramesKey] || 0) > 0
-			|| this.time < (this[stickyKey] || 0);
-		const otherIsHeart = otherGesture === "heart" || this.time < (this[otherStickyKey] || 0);
-		const joining = selfWasHeart && otherIsHeart;
 
 		if (g === "punch" || cls?.mode === "punch") {
-			// Hands occlude as the C's meet — Quest often reports a fist. Keep the heart.
-			if (joining) {
-				this.setHandGesture(side, "heart");
-				this[kindKey] = "heart";
-				this[heartFramesKey] = Math.max(this[heartFramesKey] || 0, 10);
-				this[holdKey] = Math.max(this[holdKey] || 0, 8);
-				return;
-			}
+			// Fist always wins over a half-heart on this hand.
 			this[heartFramesKey] = 0;
 			this[kindKey] = null;
 			this[holdKey] = 0;
+			this[stickyKey] = 0;
 			const curG = side === "L" ? this.handGestureL : this.handGestureR;
 			if (curG) this.setHandGesture(side, null);
-			if (!otherIsHeart) this.hideHeartConnector();
+			this.heartPoseActive = false;
+			if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 			this.holdXRHandMode(side, "punch");
 			return;
 		}
 		if (g === "peace") {
 			this[heartFramesKey] = 0;
+			this[stickyKey] = 0;
 			if (this[kindKey] !== "peace") this.pushMsg("✌️ Peace", 0.7);
 			this[kindKey] = "peace";
 			this[holdKey] = 14;
@@ -3170,6 +3161,7 @@ export class GloveFightEngine {
 		}
 		if (g === "birdie") {
 			this[heartFramesKey] = 0;
+			this[stickyKey] = 0;
 			if (this[kindKey] !== "birdie") this.pushMsg("🐦 Birdie", 0.7);
 			this[kindKey] = "birdie";
 			this[holdKey] = 14;
@@ -3197,44 +3189,58 @@ export class GloveFightEngine {
 				this.holdXRHandMode(side, "punch");
 				return;
 			}
-			this[heartFramesKey] = Math.min(48, (this[heartFramesKey] || 0) + 6);
+			this[heartFramesKey] = 3;
 			if (this[kindKey] !== "heart") this.pushMsg("♥ Half heart", 0.7);
 			this[kindKey] = "heart";
-			this[holdKey] = 28;
-			this[stickyKey] = this.time + 0.55;
+			this[holdKey] = 4;
+			this[stickyKey] = this.time + 0.04;
 			this.setHandGesture(side, "heart");
 			return;
 		}
-		// Keep a single-hand half-heart through missed frames only — never through a fist.
+		// Leftover C never outranks a fist / slap / poke / other shape.
 		if (this[kindKey] === "heart" || (this[heartFramesKey] || 0) > 0 || this.time < (this[stickyKey] || 0)) {
-			const hard = g === "peace" || g === "birdie" || g === "thumbs" || g === "thumbsDown"
-				|| g === "spock" || g === "rockOn" || cls?.mode === "slap"
-				|| (cls?.mode === "poke" && g !== "heart");
-			if (hard && !joining) {
+			const otherShape = !!(g && g !== "heart") || !!(cls?.mode);
+			if (otherShape) {
 				this[heartFramesKey] = 0;
+				this[stickyKey] = 0;
+				this[kindKey] = null;
+				this[holdKey] = 0;
+				const curG = side === "L" ? this.handGestureL : this.handGestureR;
+				if (curG === "heart" || curG) this.setHandGesture(side, null);
+				this.heartPoseActive = false;
+				if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 			} else {
-				this[heartFramesKey] = Math.max(0, (this[heartFramesKey] || 0) - 1);
-				if ((this[heartFramesKey] || 0) > 0 || joining || this.time < (this[stickyKey] || 0)) {
+				this[heartFramesKey] = Math.max(0, (this[heartFramesKey] || 0) - 2);
+				if ((this[heartFramesKey] || 0) > 0) {
 					this.setHandGesture(side, "heart");
 					this[kindKey] = "heart";
 					return;
 				}
+				this[heartFramesKey] = 0;
+				this[stickyKey] = 0;
+				this[kindKey] = null;
+				const curG = side === "L" ? this.handGestureL : this.handGestureR;
+				if (curG === "heart") this.setHandGesture(side, null);
+				if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 			}
-			this[heartFramesKey] = 0;
 		}
-		// Fist / combat wins over heart, but not over a held peace V
+		// Combat shapes win over heart (peace V still allowed as social / scissors).
 		if (cls?.mode === "slap" || (cls?.mode === "poke" && g !== "peace")) {
 			this[heartFramesKey] = 0;
 			this[kindKey] = null;
 			this[holdKey] = 0;
+			this[stickyKey] = 0;
 			const curG = side === "L" ? this.handGestureL : this.handGestureR;
 			if (curG) this.setHandGesture(side, null);
-			this.hideHeartConnector();
+			this.heartPoseActive = false;
+			if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 			const mode = cls?.mode || (g === "punch" ? "punch" : null);
 			if (mode) this.holdXRHandMode(side, mode);
 			return;
 		}
 		if (g && social.includes(g)) {
+			this[heartFramesKey] = 0;
+			this[stickyKey] = 0;
 			if (this[kindKey] !== g) this.pushMsg(g, 0.7);
 			this[kindKey] = g;
 			this[holdKey] = 12;
@@ -3243,8 +3249,13 @@ export class GloveFightEngine {
 		}
 		if (this[holdKey] > 0) {
 			this[holdKey]--;
-			if (this[kindKey] && this.isSocialGesture(this[kindKey])) this.setHandGesture(side, this[kindKey]);
-			return;
+			if (this[kindKey] === "heart") {
+				this[kindKey] = null;
+				this[holdKey] = 0;
+			} else if (this[kindKey] && this.isSocialGesture(this[kindKey])) {
+				this.setHandGesture(side, this[kindKey]);
+				return;
+			}
 		}
 		this[kindKey] = null;
 		if (cls?.mode) this.setHandGesture(side, null);
@@ -3281,7 +3292,24 @@ export class GloveFightEngine {
 		const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 		const midMet = joint("middle-finger-metacarpal") || middlePip || middleTip;
 		const palm = Math.max(0.04, dist(wrist, midMet || indexTip));
-		// Half-heart FIRST: thumb + index only. Middle / ring / pinky are ignored.
+		// Closed fist first (tips near the palm, ignore thumb) so curling never leaves a lingering C.
+		{
+			const indexTipD = dist(wrist, indexTip);
+			const middleTipD = middleTip ? dist(wrist, middleTip) : 0;
+			const ringTipD = ringTip ? dist(wrist, ringTip) : 0;
+			const pinkyTipD = pinkyTip ? dist(wrist, pinkyTip) : 0;
+			const ds = [indexTipD, middleTipD, ringTipD, pinkyTipD].filter((d) => d > 0);
+			const earlyAvg = ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : 99;
+			if (
+				indexTipD < palm * 1.38
+				&& (!middleTip || middleTipD < palm * 1.45)
+				&& earlyAvg < palm * 1.32
+				&& (!ringTip || ringTipD < palm * 1.5)
+			) {
+				return { mode: "punch", gesture: "punch", curl: 0 };
+			}
+		}
+		// Half-heart: thumb + index C. Needs a real reach so a partial fist is not stolen.
 		if (thumbTip) {
 			const aperture = dist(thumbTip, indexTip);
 			const indexReach = dist(wrist, indexTip);
@@ -3291,13 +3319,13 @@ export class GloveFightEngine {
 			const ix = indexTip.x - wrist.x, iy = indexTip.y - wrist.y, iz = indexTip.z - wrist.z;
 			const tl = Math.hypot(tx, ty, tz), il = Math.hypot(ix, iy, iz);
 			const cos = (tl > 1e-5 && il > 1e-5) ? (tx * ix + ty * iy + tz * iz) / (tl * il) : 1;
-			const openC = aperture > palm * 0.5 && aperture < palm * 3.8;
+			const openC = aperture > palm * 0.78 && aperture < palm * 3.8;
 			if (
 				openC
-				&& indexReach > palm * 0.48
-				&& thumbReach > palm * 0.32
-				&& toPip > palm * 0.2
-				&& cos < 0.9
+				&& indexReach > palm * 1.48
+				&& thumbReach > palm * 0.45
+				&& toPip > palm * 0.28
+				&& cos < 0.88
 				&& cos > -0.4
 			) {
 				return { mode: null, gesture: "heart", curl: 2 };
@@ -5319,10 +5347,10 @@ export class GloveFightEngine {
 		const showing = this.heartHalvesShowing();
 		const bothLocal = showing;
 		const halves = [];
-		if (showing || this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0) || this.heartMeshFor("L")?.visible) {
+		if (this.handGestureL === "heart") {
 			halves.push({ who: "meL", local: true, side: "L", pos: this.heartHalfWorldPos("L"), mesh: this.heartMeshFor("L") });
 		}
-		if (showing || this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0) || this.heartMeshFor("R")?.visible) {
+		if (this.handGestureR === "heart") {
 			halves.push({ who: "meR", local: true, side: "R", pos: this.heartHalfWorldPos("R"), mesh: this.heartMeshFor("R") });
 		}
 		for (const rec of this.partyRemotes.values()) {
@@ -5391,7 +5419,9 @@ export class GloveFightEngine {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
 		}
-		const closeEnoughToShowBeam = bothLocal && distPair < 0.5 && this.heartGlow > 0.02;
+		// Connector only when both half-heart shapes are actively detected (not sticky-only).
+		const bothActiveHeart = this.handGestureL === "heart" && this.handGestureR === "heart";
+		const closeEnoughToShowBeam = bothActiveHeart && bothLocal && distPair < 0.5 && this.heartGlow > 0.02;
 		const displayGlow = Math.max(this.heartGlow, distPair < 0.28 ? 0.4 : 0.18);
 		if (closeEnoughToShowBeam) {
 			if (!this.xrActive && this.heartConnectMesh) {
@@ -7998,7 +8028,11 @@ export class GloveFightEngine {
 				const combatLock = this.phase === "tutorial" && (this.tutorialLockMode === "punch" || this.tutorialLockMode === "slap" || this.tutorialLockMode === "poke");
 				if (combatLock) {
 					const curG = h.side === "L" ? this.handGestureL : this.handGestureR;
+					const stickyKey = h.side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
+					this[stickyKey] = 0;
 					if (curG) this.setHandGesture(h.side, null);
+					this.heartPoseActive = false;
+					this.hideHeartConnector();
 				} else if (h.gesture === "heart") {
 					if (this.phase === "tutorial" && this.tutorialLockMode !== "heart") continue;
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
@@ -8006,22 +8040,34 @@ export class GloveFightEngine {
 					this.setHandGesture(h.side, "heart");
 				} else if (h.gesture === "peace") {
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
+					const stickyKey = h.side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
 					this[fk] = 0;
+					this[stickyKey] = 0;
 					this.setHandGesture(h.side, "peace");
 				} else if (h.gesture && social.includes(h.gesture)) {
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
+					const stickyKey = h.side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
 					this[fk] = 0;
+					this[stickyKey] = 0;
 					this.setHandGesture(h.side, h.gesture);
 				} else if (h.mode === "punch" || h.gesture === "punch") {
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
+					const stickyKey = h.side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
 					this[fk] = 0;
+					this[stickyKey] = 0;
 					const curG = h.side === "L" ? this.handGestureL : this.handGestureR;
 					if (curG) this.setHandGesture(h.side, null);
+					this.heartPoseActive = false;
+					if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 				} else if (h.mode === "slap" || h.mode === "poke") {
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
+					const stickyKey = h.side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
 					const curG = h.side === "L" ? this.handGestureL : this.handGestureR;
 					this[fk] = 0;
+					this[stickyKey] = 0;
 					if (curG && curG !== "peace") this.setHandGesture(h.side, null);
+					this.heartPoseActive = false;
+					if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 				}
 
 				// Grenade (camera): fist high → fling → open palm
