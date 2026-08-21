@@ -230,6 +230,9 @@ export class GloveFightEngine {
 	tutorialLockMode = null;
 	tutorialAdvanceAt = 0;
 	tutorialHold = 0;
+	tutorialReadUntil = 0;
+	/** Temporarily off — set true to bring the walkway lever back. */
+	speedLeverWanted = false;
 	xrLiveL = null;
 	xrLiveR = null;
 	waveDetL = null;
@@ -840,6 +843,7 @@ export class GloveFightEngine {
 		this.waveKills = 0;
 		this.tutorialAdvanceAt = 0;
 		this.tutorialHold = 0;
+		this.tutorialReadUntil = 0;
 		this.setTutorialStep("wave");
 		this.setPhase("tutorial");
 		this.setSpeedLeverEnabled(false);
@@ -876,6 +880,7 @@ export class GloveFightEngine {
 
 	noteWaveMotion(side, pos, vel, twistRate = 0) {
 		if (this.phase !== "tutorial" || this.tutorialStep !== "wave") return;
+		if (this.tutorialInputLocked()) return;
 		if (this.tutorialAdvanceAt) return;
 		if (!pos || !vel) return;
 		const stKey = side === "L" ? "waveDetL" : side === "R" ? "waveDetR" : "waveDetMouse";
@@ -1214,7 +1219,11 @@ export class GloveFightEngine {
 		this.syncXrGloves();
 		if (this.tutorialLockMode === "heart") {
 			this.heartShieldCdUntil = 0;
+		} else {
+			this.hideHeartConnector();
+			this.heartDetectHold = 0;
 		}
+		this.tutorialReadUntil = this.time + (step === "countdown" ? 0 : 2);
 		if (step === "countdown") {
 			this.xrIntroT = 4.15;
 			this.xrIntroBeat = null;
@@ -1226,8 +1235,19 @@ export class GloveFightEngine {
 		this.emitHud();
 	}
 
+	tutorialInputLocked() {
+		return this.phase === "tutorial" && this.time < (this.tutorialReadUntil || 0);
+	}
+
+	canSpawnHeartShield() {
+		if (this.tutorialInputLocked()) return false;
+		if (this.phase === "tutorial") return this.tutorialStep === "heart";
+		return this.phase === "playing" || this.phase === "waveClear" || this.phase === "victory";
+	}
+
 	noteTutorialAction(kind) {
 		if (this.phase !== "tutorial") return;
+		if (this.tutorialInputLocked()) return;
 		if (this.tutorialStep !== kind) return;
 		if (this.tutorialAdvanceAt) return;
 		this.tutorialCount = (this.tutorialCount || 0) + 1;
@@ -1257,13 +1277,14 @@ export class GloveFightEngine {
 		this.tutorialCount = 0;
 		this.tutorialNeed = 0;
 		this.tutorialAdvanceAt = 0;
+		this.tutorialReadUntil = 0;
 		this.xrIntroBeat = null;
 		this.countdownT = null;
 		this.layoutXrCountdownHud(false);
 		this.clearPoseGuides();
 		this.clearWaveDemo();
 		this.setPhase("playing");
-		this.setSpeedLeverEnabled(true);
+		this.setSpeedLeverEnabled(this.speedLeverWanted);
 		this.beginWave(1);
 		this.pushMsg("Fight!", 1.1);
 	}
@@ -1604,8 +1625,8 @@ export class GloveFightEngine {
 	}
 	/** Two-hand heart → temporary damage shield. Optional world-space fuse point. */
 	spawnHeartShield(at = null) {
-		const tutorialHeart = this.phase === "tutorial" && this.tutorialStep === "heart";
-		if (!tutorialHeart && this.time < this.heartShieldCdUntil) {
+		if (!this.canSpawnHeartShield()) return;
+		if (this.time < this.heartShieldCdUntil && !(this.phase === "tutorial" && this.tutorialStep === "heart")) {
 			this.pushMsg("Shield cooling…", 0.7);
 			return;
 		}
@@ -2996,6 +3017,9 @@ export class GloveFightEngine {
 		this.applyXrPointerPolicy();
 		this.applySkinnedHandVisibility();
 		if (frame && refSpace && (xrHandL || xrHandR)) {
+			if (!this.canSpawnHeartShield()) {
+				if ((this.heartDetectHold || 0) > 0) this.heartDetectHold = 0;
+			} else {
 			const connected = this.heartHalvesJoined()
 				|| (xrHandL && xrHandR && this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR));
 			if (connected) {
@@ -3009,6 +3033,7 @@ export class GloveFightEngine {
 				}
 			} else if ((this.heartDetectHold || 0) > 0) {
 				this.heartDetectHold = Math.max(0, this.heartDetectHold - Math.max(0.016, dt || 0.016));
+			}
 			}
 		}
 	}
@@ -4442,6 +4467,7 @@ export class GloveFightEngine {
 		this.tutorialLockMode = null;
 		this.tutorialAdvanceAt = 0;
 		this.tutorialHold = 0;
+		this.tutorialReadUntil = 0;
 		this.waveDetL = null;
 		this.waveDetR = null;
 		this.waveDetMouse = null;
@@ -5252,6 +5278,12 @@ export class GloveFightEngine {
 			if (h.mesh && !shown.has(h.mesh)) setHeartHalfGlow(h.mesh, 0.1);
 		}
 		const distPair = bestPair[0].pos.distanceTo(bestPair[1].pos);
+		if (!this.canSpawnHeartShield()) {
+			if (this.heartConnectMesh) this.heartConnectMesh.visible = false;
+			if (this.heartWorldBeam) this.heartWorldBeam.visible = false;
+			if (this.heartCamBeam) this.heartCamBeam.visible = false;
+			return;
+		}
 		if (this.heartGlow > 0.4 && this.time - (this._heartChargeAt || 0) > 0.16) {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
@@ -5539,6 +5571,16 @@ export class GloveFightEngine {
 	}
 	/** Speed lever on the right — default pushed back (idle). Fist-grab and shove forward. */
 	spawnSpeedLever() {
+		if (!this.speedLeverWanted) {
+			if (this.walkLever?.parent) this.walkLever.parent.remove(this.walkLever);
+			this.walkLever = null;
+			this.walkLeverPivot = null;
+			this.walkLeverHandle = null;
+			this.walkLeverHalo = null;
+			this.walkSpeed = 0;
+			this.walkLeverAmount = 0;
+			return;
+		}
 		if (this.walkLever?.parent) this.walkLever.parent.remove(this.walkLever);
 		const lever = makeSpeedLever(this.palette);
 		this.walkLever = lever;
@@ -5556,6 +5598,7 @@ export class GloveFightEngine {
 		this.setSpeedLeverEnabled(false);
 	}
 	setSpeedLeverEnabled(on) {
+		if (!this.speedLeverWanted) on = false;
 		if (!this.walkLever) return;
 		this.walkLever.visible = !!on;
 		if (!on) {
@@ -6577,6 +6620,7 @@ export class GloveFightEngine {
 	tryAttack(hand, opts = {}) {
 		if (this.walkLeverGrabSide === hand) return;
 		if (this.phase === "paused") return;
+		if (this.tutorialInputLocked()) return;
 		if (this.phase === "tutorial") {
 			if (this.tutorialLockMode === "heart" || this.tutorialLockMode === "wave" || this.tutorialStep === "wave" || this.tutorialStep === "enter" || this.tutorialStep === "countdown") return;
 			if (opts.forceMode === "grenade") return;
