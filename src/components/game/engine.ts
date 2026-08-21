@@ -240,6 +240,8 @@ export class GloveFightEngine {
 	poseGuideL = null;
 	poseGuideR = null;
 	poseGuideKind = null;
+	waveDemoL = null;
+	waveDemoR = null;
 	bootReady = false;
 	bootPct = 0;
 	bootStep = "Waking the ring…";
@@ -386,6 +388,8 @@ export class GloveFightEngine {
 	heartConnectMesh = null;
 	heartWorldBeam = null;
 	heartGlow = 0;
+	heartSeatL = null;
+	heartSeatR = null;
 	heartAimL = null;
 	heartAimR = null;
 	xrGestHoldL = 0;
@@ -995,6 +999,86 @@ export class GloveFightEngine {
 		this.scene.add(this.poseGuideR);
 	}
 
+	clearWaveDemo() {
+		for (const g of [this.waveDemoL, this.waveDemoR]) {
+			if (g?.parent) g.parent.remove(g);
+		}
+		this.waveDemoL = null;
+		this.waveDemoR = null;
+	}
+
+	ensureWaveDemo() {
+		const ready = poseGuidesReady();
+		if (this.waveDemoL && this.waveDemoR) {
+			const skinned = this.waveDemoL.userData.skinnedReady && this.waveDemoR.userData.skinnedReady;
+			if (skinned || !ready) return;
+			this.clearWaveDemo();
+		}
+		if (!makeTutorialPoseGuide) return;
+		this.waveDemoL = makeTutorialPoseGuide("slap", "L");
+		this.waveDemoR = makeTutorialPoseGuide("slap", "R");
+		this.waveDemoL.name = "waveDemo_L";
+		this.waveDemoR.name = "waveDemo_R";
+		this.scene.add(this.waveDemoL);
+		this.scene.add(this.waveDemoR);
+	}
+
+	updateWaveDemo() {
+		if (this.phase !== "tutorial" || this.tutorialStep !== "wave") {
+			this.clearWaveDemo();
+			return;
+		}
+		this.ensureWaveDemo();
+		const camPos = new THREE.Vector3();
+		this.camera.getWorldPosition(camPos);
+		const fwd = new THREE.Vector3();
+		this.camera.getWorldDirection(fwd);
+		if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+		fwd.normalize();
+		const up = new THREE.Vector3(0, 1, 0);
+		const right = new THREE.Vector3().crossVectors(fwd, up);
+		if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+		else right.normalize();
+		const t = this.time || 0;
+		const dist = this.xrActive ? 0.48 : 0.68;
+		for (const side of ["L", "R"]) {
+			const g = side === "L" ? this.waveDemoL : this.waveDemoR;
+			if (!g) continue;
+			const sign = side === "L" ? -1 : 1;
+			const wave = Math.sin(t * 4.6 + (side === "L" ? 0 : 0.85));
+			const pos = camPos.clone()
+				.addScaledVector(fwd, dist)
+				.addScaledVector(right, sign * (0.18 + wave * 0.14))
+				.add(new THREE.Vector3(0, -0.1 + Math.cos(t * 4.6) * 0.03, 0));
+			const yAxis = new THREE.Vector3(sign * 0.08 + wave * 0.52, 0.72, -0.42).normalize();
+			let zAxis = camPos.clone().sub(pos);
+			if (zAxis.lengthSq() < 1e-8) zAxis.copy(fwd).negate();
+			zAxis.normalize();
+			const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis);
+			if (xAxis.lengthSq() < 1e-8) xAxis.copy(right);
+			xAxis.normalize();
+			zAxis.crossVectors(xAxis, yAxis).normalize();
+			const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+			const q = new THREE.Quaternion().setFromRotationMatrix(hm);
+			placePoseGuide(g, pos, q, 0);
+			g.visible = true;
+			g.traverse((o) => {
+				if (!o.isMesh || !o.material) return;
+				const mats = Array.isArray(o.material) ? o.material : [o.material];
+				for (const m of mats) {
+					if (m.color) m.color.setHex(0xb7e4ff);
+					if (m.emissive) {
+						m.emissive.setHex(0x2a6aa8);
+						m.emissiveIntensity = 0.55;
+					}
+					m.opacity = 0.5;
+					m.transparent = true;
+					m.depthWrite = false;
+				}
+			});
+		}
+	}
+
 	xrRefQuatToWorld(q) {
 		const out = q.clone();
 		if (this.xrActive && this.playerRig) {
@@ -1119,6 +1203,7 @@ export class GloveFightEngine {
 			this.countdownT = 3;
 			this.layoutXrCountdownHud(true);
 		}
+		if (step !== "wave") this.clearWaveDemo();
 		this.paintXrHud(true);
 		this.emitHud();
 	}
@@ -1158,6 +1243,7 @@ export class GloveFightEngine {
 		this.countdownT = null;
 		this.layoutXrCountdownHud(false);
 		this.clearPoseGuides();
+		this.clearWaveDemo();
 		this.setPhase("playing");
 		this.setSpeedLeverEnabled(true);
 		this.beginWave(1);
@@ -1169,6 +1255,7 @@ export class GloveFightEngine {
 		this.updateHandMeshes();
 		this.syncXrGloves();
 		this.updatePoseGuides();
+		this.updateWaveDemo();
 		if (this.tutorialAdvanceAt) {
 			if (this.time >= this.tutorialAdvanceAt) {
 				this.tutorialAdvanceAt = 0;
@@ -1307,6 +1394,14 @@ export class GloveFightEngine {
 	}
 	getHandMode(hand) {
 		return hand === "L" ? this.modeL : this.modeR;
+	}
+	/** Live combat pose at fire time — flying copy must match fist / open palm / scissors. */
+	shotModeForHand(hand) {
+		const live = this.liveHandClass(hand);
+		if (live?.mode === "punch" || live?.mode === "slap" || live?.mode === "poke") return live.mode;
+		const held = this.getHandMode(hand);
+		if (held === "punch" || held === "slap" || held === "poke") return held;
+		return null;
 	}
 	isSocialGesture(g) {
 		return g === "thumbs" || g === "thumbsDown" || g === "peace" || g === "spock" || g === "heart" || g === "rockOn" || g === "birdie";
@@ -1568,7 +1663,7 @@ export class GloveFightEngine {
 		const thumbDist = d(lt, rt);
 		const wristDist = d(lw, rw);
 		// Tips close, thumbs close — halves must actually meet (forgiving on camera)
-		if (indexDist > 0.16 || thumbDist > 0.18 || wristDist > 0.48) return false;
+		if (indexDist > 0.2 || thumbDist > 0.22 || wristDist > 0.55) return false;
 		// In image coords y grows downward — thumbs should be below index tips
 		const tipY = (li.y + ri.y) * 0.5;
 		const thY = (lt.y + rt.y) * 0.5;
@@ -1604,10 +1699,10 @@ export class GloveFightEngine {
 		const centerGap = midL.distanceTo(midR);
 		// Join when the two C openings meet — no world-upright requirement
 		// (looking down at a heart used to fail the old thumbY < indexY test).
-		const tipsMeet = indexGap < Math.max(0.13, ap * 1.05) && thumbGap < Math.max(0.15, ap * 1.15);
-		const cupsMeet = centerGap < Math.max(0.12, ap * 0.9);
+		const tipsMeet = indexGap < Math.max(0.18, ap * 1.2) && thumbGap < Math.max(0.2, ap * 1.3);
+		const cupsMeet = centerGap < Math.max(0.18, ap * 1.1);
 		if (!tipsMeet && !cupsMeet) return false;
-		if (d(lw, rw) > 0.58) return false;
+		if (d(lw, rw) > 0.72) return false;
 		const openL = midL.clone().sub(lw);
 		const openR = midR.clone().sub(rw);
 		const toR = midR.clone().sub(midL);
@@ -2350,6 +2445,8 @@ export class GloveFightEngine {
 				const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
 				const q = new THREE.Quaternion().setFromRotationMatrix(hm);
 				this.placeXrPropWorld(glove, mid, q);
+				if (side === "L") this.heartSeatL = mid.clone();
+				else this.heartSeatR = mid.clone();
 				if (heart) {
 					heart.position.set(0, 0, 0.012 * towardCam);
 					heart.quaternion.identity();
@@ -2932,6 +3029,16 @@ export class GloveFightEngine {
 			const pipD = dist(wrist, pip);
 			return cos < -0.28 && tipD > pipD * 1.05 && tipD > palm * 1.12;
 		};
+		// Paper needs actually-straight fingers — a half curl is not an open palm.
+		const fingerOpen = (tip, pip, mcp, dip) => {
+			if (!tip || !pip) return false;
+			const mcpP = mcp || wrist;
+			const cos = bendCos(tip, pip, mcpP);
+			const dipCos = dip ? bendCos(tip, dip, pip) : -1;
+			const tipD = dist(wrist, tip);
+			const pipD = dist(wrist, pip);
+			return cos < -0.62 && dipCos < -0.4 && tipD > pipD * 1.14 && tipD > palm * 1.32;
+		};
 		const fingerTucked = (tip, pip, mcp) => {
 			if (!tip) return true;
 			const mcpP = mcp || wrist;
@@ -2955,6 +3062,15 @@ export class GloveFightEngine {
 		const middleStraight = fingerStraight(middleTip, middlePip, middleMcp);
 		const ringTucked = fingerTucked(ringTip, ringPip, ringMcp);
 		const pinkyTucked = fingerTucked(pinkyTip, pinkyPip, pinkyMcp);
+		const indexDip = joint("index-finger-phalanx-distal");
+		const middleDip = joint("middle-finger-phalanx-distal");
+		const ringDip = joint("ring-finger-phalanx-distal");
+		const pinkyDip = joint("pinky-finger-phalanx-distal");
+		const indexOpen = fingerOpen(indexTip, indexPip, indexMcpJ, indexDip);
+		const middleOpen = fingerOpen(middleTip, middlePip, middleMcp, middleDip);
+		const ringOpen = fingerOpen(ringTip, ringPip, ringMcp, ringDip);
+		const pinkyOpen = fingerOpen(pinkyTip, pinkyPip, pinkyMcp, pinkyDip);
+		const openCount = [indexOpen, middleOpen, ringOpen, pinkyOpen].filter(Boolean).length;
 		const n = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
 		const indexTucked = fingerTucked(indexTip, indexPip, indexMcpJ);
 		const middleTucked = fingerTucked(middleTip, middlePip, middleMcp);
@@ -3023,12 +3139,13 @@ export class GloveFightEngine {
 			}
 		}
 
-		// Spock: all four fingers out with gap middle↔ring
-		if (indexUp && middleUp && ringUp && pinkyUp) {
+		// Spock: all four STRAIGHT with a gap. Paper: 3–4 straight, together or spread.
+		if (openCount >= 4) {
 			const gap = dist(middleTip, ringTip);
 			if (gap > palm * 0.55) return { mode: null, gesture: "spock", curl: n };
 			return { mode: "slap", gesture: "slap", curl: n };
 		}
+		if (openCount >= 3) return { mode: "slap", gesture: "slap", curl: n };
 		if (middleUp && !indexUp && !ringUp && !pinkyUp) {
 			return { mode: null, gesture: "birdie", curl: n };
 		}
@@ -3046,8 +3163,9 @@ export class GloveFightEngine {
 		if (n === 0 && !indexUp) {
 			return { mode: "punch", gesture: "punch", curl: n };
 		}
-		if (n >= 3) return { mode: "slap", gesture: "slap", curl: n };
 		if (n <= 2 && !indexStraight) return { mode: "punch", gesture: "punch", curl: n };
+		// Half-curl is a fist, not paper — never leave mode sticky on slap.
+		if (openCount < 3) return { mode: "punch", gesture: "punch", curl: n };
 		return null;
 	}
 	/** XR finger snap: thumb under finger (closed), then thumb up + finger down. */
@@ -3276,15 +3394,17 @@ export class GloveFightEngine {
 
 					if (swing.kind === "grenade") {
 						this.tryAttack(side, { forceMode: "grenade", strikePower: power, handSpeed, fromMotion: true });
-					} else if (swing.kind === "punch") {
-						this.tryAttack(side, { strikePower: power, handSpeed, fromMotion: true });
 					} else {
-						const style = swing.kind === "wrist" ? "wrist" : "sweep";
-						if (side === "L") { this.xrLastSlapStyleL = style; this.xrLastSlapTL = now; }
-						else { this.xrLastSlapStyleR = style; this.xrLastSlapTR = now; }
+						const poseMode = this.shotModeForHand(side);
+						const shot = poseMode || (swing.kind === "punch" ? "punch" : "slap");
+						const style = swing.kind === "wrist" ? "wrist" : swing.kind === "sweep" ? "sweep" : null;
+						if (shot === "slap") {
+							if (side === "L") { this.xrLastSlapStyleL = style || "sweep"; this.xrLastSlapTL = now; }
+							else { this.xrLastSlapStyleR = style || "sweep"; this.xrLastSlapTR = now; }
+						}
 						this.tryAttack(side, {
-							forceMode: "slap",
-							slapStyle: style,
+							forceMode: shot,
+							slapStyle: shot === "slap" ? (style || "sweep") : undefined,
 							slapDir: swing.slapDir || 0,
 							strikePower: power,
 							handSpeed,
@@ -4618,8 +4738,8 @@ export class GloveFightEngine {
 	heartPairGlow(a, b) {
 		if (!a || !b) return 0;
 		const d = a.distanceTo(b);
-		// Start glowing at 0.32m, full around 0.08m — not from across the chest
-		return THREE.MathUtils.clamp(1 - (d - 0.08) / 0.24, 0, 1);
+		// Faint link from ~0.8m, full when the C's nearly touch
+		return THREE.MathUtils.clamp(1 - (d - 0.08) / 0.72, 0, 1);
 	}
 	handsCloseForHeart() {
 		const a = this.worldHandPos("L");
@@ -4632,13 +4752,13 @@ export class GloveFightEngine {
 		const dist = Math.max(0.04, a.distanceTo(b));
 		const mid = a.clone().add(b).multiplyScalar(0.5);
 		mesh.position.copy(mid);
-		mesh.scale.set(1 + glow * 1.6, dist, 1 + glow * 1.6);
+		mesh.scale.set(0.55 + glow * 2.4, dist, 0.55 + glow * 2.4);
 		mesh.lookAt(b);
 		mesh.rotateX(Math.PI / 2);
 		mesh.visible = true;
 		if (mesh.material) {
-			mesh.material.opacity = 0.16 + glow * 0.78;
-			if (mesh.material.color) mesh.material.color.setHex(glow > 0.85 ? 0xffe0ef : 0xff4d8d);
+			mesh.material.opacity = 0.1 + glow * 0.88;
+			if (mesh.material.color) mesh.material.color.setHex(glow > 0.75 ? 0xffe0ef : 0xff4d8d);
 		}
 	}
 	heartMeshFor(side) {
@@ -4649,10 +4769,10 @@ export class GloveFightEngine {
 		const bothLocal = this.handGestureL === "heart" && this.handGestureR === "heart";
 		const halves = [];
 		if (this.handGestureL === "heart") {
-			halves.push({ who: "meL", local: true, side: "L", pos: this.worldHandPos("L"), mesh: this.heartMeshFor("L") });
+			halves.push({ who: "meL", local: true, side: "L", pos: this.heartSeatL || this.worldHandPos("L"), mesh: this.heartMeshFor("L") });
 		}
 		if (this.handGestureR === "heart") {
-			halves.push({ who: "meR", local: true, side: "R", pos: this.worldHandPos("R"), mesh: this.heartMeshFor("R") });
+			halves.push({ who: "meR", local: true, side: "R", pos: this.heartSeatR || this.worldHandPos("R"), mesh: this.heartMeshFor("R") });
 		}
 		for (const rec of this.partyRemotes.values()) {
 			const st = this.party?.remotes.get(rec.id);
@@ -4670,7 +4790,7 @@ export class GloveFightEngine {
 			for (let j = i + 1; j < halves.length; j++) {
 				if (halves[i].who === halves[j].who) continue;
 				const g = this.heartPairGlow(halves[i].pos, halves[j].pos);
-				if (g > bestAny) { bestAny = g; pairAny = [halves[i], halves[j]]; }
+				if (!pairAny || g > bestAny) { bestAny = g; pairAny = [halves[i], halves[j]]; }
 				if (halves[i].local !== halves[j].local && g > bestMixed) {
 					bestMixed = g;
 					pairMixed = [halves[i], halves[j]];
@@ -4715,15 +4835,16 @@ export class GloveFightEngine {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
 		}
-		const closeEnoughToShowBeam = distPair < 0.28 && this.heartGlow > 0.32;
+		const closeEnoughToShowBeam = bothLocal || (distPair < 0.85 && this.heartGlow > 0.02);
+		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.22) : this.heartGlow;
 		if (closeEnoughToShowBeam) {
 			if (localOnly && this.heartConnectMesh) {
-				this.placeHeartBeam(this.heartConnectMesh, this.leftPos.clone(), this.rightPos.clone(), this.heartGlow);
+				this.placeHeartBeam(this.heartConnectMesh, this.leftPos.clone(), this.rightPos.clone(), displayGlow);
 			} else if (this.heartConnectMesh) {
 				this.heartConnectMesh.visible = false;
 			}
 			if (!localOnly && this.heartWorldBeam) {
-				this.placeHeartBeam(this.heartWorldBeam, bestPair[0].pos, bestPair[1].pos, this.heartGlow);
+				this.placeHeartBeam(this.heartWorldBeam, bestPair[0].pos, bestPair[1].pos, displayGlow);
 			} else if (this.heartWorldBeam) {
 				this.heartWorldBeam.visible = false;
 			}
@@ -6056,8 +6177,8 @@ export class GloveFightEngine {
 				? (hand === "L" ? this.xrStrikePowerL : this.xrStrikePowerR)
 				: 0.85);
 		if (clickBoost) strikePower = Math.min(1.6, strikePower * 2);
-		// Motion can force a slap (wrist / sweep) even if mode is rock
-		let mode = opts.forceMode || this.getHandMode(hand);
+		// Projectile mesh follows the live pose (glove / fish / scissors)
+		let mode = opts.forceMode || this.shotModeForHand(hand) || this.getHandMode(hand);
 		if (this.phase === "tutorial" && (this.tutorialLockMode === "punch" || this.tutorialLockMode === "slap" || this.tutorialLockMode === "poke")) {
 			mode = this.tutorialLockMode;
 		}
@@ -6484,7 +6605,7 @@ export class GloveFightEngine {
 	}
 
 	fireGlove(hand, powered, opts = {}) {
-		const mode = opts.forceMode || this.getHandMode(hand);
+		const mode = opts.forceMode || this.shotModeForHand(hand) || this.getHandMode(hand);
 		const isSlap = mode === "slap";
 		const isPoke = mode === "poke";
 		// wrist = small/straight · sweep = big side-to-side · default sweep for trigger slaps
@@ -7338,9 +7459,10 @@ export class GloveFightEngine {
 							? Math.max(h.lift || 0, h.thrust || 0)
 							: Math.max(h.thrust || 0, 0.35);
 					const strikePower = THREE.MathUtils.clamp(0.25 + mag * 0.95, 0.25, 1.35);
-					const opts = { strikePower, fromMotion: true };
-					if (h.slap) {
-						opts.forceMode = "slap";
+					const shot = this.shotModeForHand(h.side)
+						|| (h.mode === "punch" || h.mode === "slap" || h.mode === "poke" ? h.mode : "punch");
+					const opts = { strikePower, fromMotion: true, forceMode: shot };
+					if (shot === "slap") {
 						opts.slapStyle = Math.abs(h.swipe || 0) > 0.55 ? "sweep" : "wrist";
 						opts.slapDir = h.slapDir || 0;
 					}

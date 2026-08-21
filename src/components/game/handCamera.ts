@@ -150,6 +150,32 @@ function fingerTucked(lm: NormalizedLandmark[], tip: number, pip: number, mcp: n
   return !fingerStraight(lm, tip, pip, mcp);
 }
 
+function fingerOpen(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
+  const wrist = lm[0]!;
+  const t = lm[tip]!;
+  const p = lm[pip]!;
+  const m = lm[mcp]!;
+  const ax = m.x - p.x, ay = m.y - p.y, az = (m.z ?? 0) - (p.z ?? 0);
+  const bx = t.x - p.x, by = t.y - p.y, bz = (t.z ?? 0) - (p.z ?? 0);
+  const al = Math.hypot(ax, ay, az), bl = Math.hypot(bx, by, bz);
+  if (al < 1e-5 || bl < 1e-5) return false;
+  const cos = (ax * bx + ay * by + az * bz) / (al * bl);
+  const tipD = dist(wrist, t);
+  const pipD = dist(wrist, p);
+  const palm = dist(lm[5]!, lm[17]!) || 0.08;
+  // DIP if present (index 7, middle 11, ring 15, pinky 19)
+  const dipIdx = tip - 1;
+  const dip = lm[dipIdx];
+  let dipCos = -1;
+  if (dip) {
+    const dx = p.x - dip.x, dy = p.y - dip.y, dz = (p.z ?? 0) - (dip.z ?? 0);
+    const ex = t.x - dip.x, ey = t.y - dip.y, ez = (t.z ?? 0) - (dip.z ?? 0);
+    const dl = Math.hypot(dx, dy, dz), el = Math.hypot(ex, ey, ez);
+    if (dl > 1e-5 && el > 1e-5) dipCos = (dx * ex + dy * ey + dz * ez) / (dl * el);
+  }
+  return cos < -0.62 && dipCos < -0.4 && tipD > pipD * 1.14 && tipD > palm * 1.05;
+}
+
 function fingerExtended(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
   const wrist = lm[0]!;
   const t = lm[tip]!;
@@ -158,9 +184,7 @@ function fingerExtended(lm: NormalizedLandmark[], tip: number, pip: number, mcp:
   const tipDist = dist(wrist, t);
   const pipDist = dist(wrist, p);
   const mcpDist = dist(wrist, m);
-  // tip beyond pip, and segment tip-mcp longer than pip-mcp (straight-ish finger)
   const open = tipDist > pipDist * 1.08 && dist(t, m) > dist(p, m) * 1.15;
-  // also: tip farther from mcp than pip is (unfolded)
   const unfolded = dist(t, m) > mcpDist * 0.55;
   return open && unfolded;
 }
@@ -204,6 +228,11 @@ function classifyRps(lm: NormalizedLandmark[]): {
   const pinky = fingerExtended(lm, 20, 18, 17);
   const thumb = thumbExtended(lm);
   const extCount = [index, middle, ring, pinky].filter(Boolean).length;
+  const indexOpen = fingerOpen(lm, 8, 6, 5);
+  const middleOpen = fingerOpen(lm, 12, 10, 9);
+  const ringOpen = fingerOpen(lm, 16, 14, 13);
+  const pinkyOpen = fingerOpen(lm, 20, 18, 17);
+  const openCount = [indexOpen, middleOpen, ringOpen, pinkyOpen].filter(Boolean).length;
 
   // Thumbs up/down only when the thumb is clearly sticking OUT of a closed fist.
   // A tucked / wrapping thumb is just rock / punch.
@@ -283,6 +312,21 @@ function classifyRps(lm: NormalizedLandmark[]): {
     return { gesture: "punch", mode: "punch", confidence: 0.9, label: "rock" };
   }
 
+  // Spock: four STRAIGHT fingers with a gap. Paper: 3–4 straight, together or spread.
+  if (openCount >= 4) {
+    const midTip = lm[12]!;
+    const ringTip = lm[16]!;
+    const gap = dist(midTip, ringTip);
+    const palm = dist(lm[5]!, lm[17]!) || 0.08;
+    if (gap > palm * 0.55) {
+      return { gesture: "spock", mode: null, confidence: 0.86, label: "spock" };
+    }
+    return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
+  }
+  if (openCount >= 3) {
+    return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
+  }
+
   // Spock: index+middle out, ring+pinky out, with a gap between middle and ring tips
   if (index && middle && ring && pinky) {
     const midTip = lm[12]!;
@@ -324,12 +368,13 @@ function classifyRps(lm: NormalizedLandmark[]): {
   if (extCount === 0 && !thumb) {
     return { gesture: "punch", mode: "punch", confidence: 0.9, label: "rock" };
   }
-  // Paper: open hand — 3–4 fingers extended (not spock gap)
-  if (extCount >= 3) {
+  // Paper: open hand — 3–4 fingers actually straight (together or spread is fine)
+  if (openCount >= 3) {
     return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
   }
-  if (extCount === 0) {
-    return { gesture: "punch", mode: "punch", confidence: 0.75, label: "rock" };
+  // Half-curl is a fist, not paper — keep mode from sticking on slap.
+  if (openCount < 3) {
+    return { gesture: "punch", mode: "punch", confidence: 0.72, label: "rock" };
   }
   return { gesture: "none", mode: null, confidence: 0.2, label: "unknown" };
 }
@@ -652,10 +697,13 @@ export class HandCameraTracker {
         mode = null;
         score = rps.confidence;
       } else if (rps.confidence < 0.55 && mpMode && mpScore > 0.6) {
-        // fall back to MediaPipe rock/paper/victory if geometry unsure
-        gesture = mpGesture;
-        mode = mpMode;
-        score = mpScore;
+        // fall back to MediaPipe rock/paper/victory if geometry unsure —
+        // never trust Open_Palm when landmarks say the fingers aren't straight
+        if (!(mpMode === "slap" && rps.mode === "punch")) {
+          gesture = mpGesture;
+          mode = mpMode;
+          score = mpScore;
+        }
       } else if (rps.mode && mpMode && rps.mode === mpMode) {
         score = Math.min(1, rps.confidence * 0.55 + mpScore * 0.5);
       }
