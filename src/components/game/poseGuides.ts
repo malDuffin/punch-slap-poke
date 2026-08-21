@@ -142,8 +142,18 @@ function dummyPalmOut(dummies: Record<string, THREE.Object3D>) {
   const across = pnk.sub(idx);
   const along = mid.sub(wr);
   const n = new THREE.Vector3().crossVectors(across, along);
-  if (n.lengthSq() < 1e-12) return new THREE.Vector3(1, 0, 0);
-  return n.normalize();
+  if (n.lengthSq() < 1e-12) n.set(1, 0, 0);
+  else n.normalize();
+  // The right-hand GLB's geometric cross points out the BACK of the hand.
+  // Flip so palm-out always faces the thumb (palmar) side; otherwise the
+  // right guide curls the wrong way on X (OK-sign / hyperextension).
+  if (dummies["thumb-tip"]) {
+    const th = new THREE.Vector3();
+    dummies["thumb-tip"].getWorldPosition(th);
+    const palmC = wr.clone().addScaledVector(along, 0.35);
+    if (n.dot(th.sub(palmC)) < 0) n.negate();
+  }
+  return n;
 }
 
 /**
