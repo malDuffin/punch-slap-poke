@@ -1056,8 +1056,8 @@ export class GloveFightEngine {
 			const towardCam = camPos.clone().sub(pos);
 			if (towardCam.lengthSq() < 1e-8) towardCam.copy(fwd).negate();
 			towardCam.normalize();
-			// Generic-hand GLB: fingers along wrist −Z. Right palm +Y, left palm −Y.
-			const palmDir = side === "L" ? towardCam.clone().negate() : towardCam.clone();
+			// Both GLBs have the palmar side on wrist −Y (right +Y is the back).
+			const palmDir = towardCam.clone().negate();
 			let fingerDir = viewUp.clone().applyAxisAngle(towardCam, waveAng);
 			fingerDir.addScaledVector(palmDir, -fingerDir.dot(palmDir));
 			if (fingerDir.lengthSq() < 1e-8) fingerDir.copy(viewUp);
