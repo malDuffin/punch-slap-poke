@@ -83,37 +83,37 @@ const TUTORIAL_SCRIPT = {
 	wave: {
 		lock: "wave", need: 5,
 		title: "WAVE TO START",
-		body: "Wave slowly both ways for five seconds — left then right, up then down from the elbow, or a small wrist twist each way. One-way drifting doesn't count. Keep going to fill the waveometer; stop and it drains back.",
-		hint: "Waveometer · 5s",
+		body: "Wave both ways — left then right, or up then down from the elbow. Keep going to fill the bar. Stop and it drains.",
+		hint: "Wave both ways",
 	},
 	punch: {
 		lock: "punch", need: 3,
 		title: "ROCK — FIST",
-		body: "Close a fist. Match the outline above your hand — the glove appears only on a real fist. Then punch three times.",
-		hint: "Fist first, then punch",
+		body: "Close a fist so the glove appears, then punch three times.",
+		hint: "Fist, then punch ×3",
 	},
 	slap: {
 		lock: "slap", need: 3,
 		title: "PAPER — OPEN HAND",
-		body: "Open your hand, palm facing forward. Match the outline — the fish appears only on an open palm. Then slap three times.",
-		hint: "Open palm, then slap",
+		body: "Open palm facing forward so the fish appears, then slap three times.",
+		hint: "Open palm, then slap ×3",
 	},
 	poke: {
 		lock: "poke", need: 3,
 		title: "SCISSORS",
-		body: "Index and middle out — a wide V is fine. Open the two fingers, then snip them together three times.",
-		hint: "Spread the V, then snip shut",
+		body: "Index and middle out in a V. Open, then snip them together three times.",
+		hint: "Spread, then snip ×3",
 	},
 	heart: {
 		lock: "heart", need: 1,
 		title: "HEART SHIELD",
-		body: "Make a C with thumb + index only (other fingers ignored). Thumb at the bottom. Match the outline, then push the halves together once.",
-		hint: "C + C, then join",
+		body: "C-shape with thumb and index on each hand. Bring the two halves together until they join.",
+		hint: "Join the two C's",
 	},
 	enter: {
 		lock: null, need: 0,
 		title: "ENTER THE RING",
-		body: "Bad guys ahead. Punch, slap, and snip to take them down. The heart shield blocks hits. Get ready.",
+		body: "Punch, slap, and snip to take them down. Heart shield blocks hits.",
 		hint: "Fight!",
 	},
 	countdown: {
@@ -394,6 +394,12 @@ export class GloveFightEngine {
 	heartSeatR = null;
 	heartAimL = null;
 	heartAimR = null;
+	heartStickyUntilL = 0;
+	heartStickyUntilR = 0;
+	heartTipThumbL = null;
+	heartTipIndexL = null;
+	heartTipThumbR = null;
+	heartTipIndexR = null;
 	xrGestHoldL = 0;
 	xrGestHoldR = 0;
 	xrGestKindL = null;
@@ -1682,18 +1688,18 @@ export class GloveFightEngine {
 	}
 	detectTwoHandHeartXR(frame, refSpace, handL, handR) {
 		const wp = (hand, name) => {
-			const j = hand.get?.(name) || hand.get(name);
+			const j = hand?.get?.(name) || hand?.get(name);
 			if (!j) return null;
 			const pose = safeGetJointPose(frame, j, refSpace);
 			if (!pose) return null;
 			const p = pose.transform.position;
 			return this.xrRefToWorld(new THREE.Vector3(p.x, p.y, p.z));
 		};
-		// Join uses thumb + index only.
-		const li = wp(handL, "index-finger-tip");
-		const ri = wp(handR, "index-finger-tip");
-		const lt = wp(handL, "thumb-tip");
-		const rt = wp(handR, "thumb-tip");
+		const li = wp(handL, "index-finger-tip") || this.heartTipIndexL;
+		const ri = wp(handR, "index-finger-tip") || this.heartTipIndexR;
+		const lt = wp(handL, "thumb-tip") || this.heartTipThumbL;
+		const rt = wp(handR, "thumb-tip") || this.heartTipThumbR;
+		if (this.heartSeatL && this.heartSeatR && this.heartSeatL.distanceTo(this.heartSeatR) < 0.42) return true;
 		if (!li || !ri || !lt || !rt) return false;
 		const d = (a, b) => a.distanceTo(b);
 		const indexGap = d(li, ri);
@@ -1701,10 +1707,25 @@ export class GloveFightEngine {
 		const cL = li.clone().add(lt).multiplyScalar(0.5);
 		const cR = ri.clone().add(rt).multiplyScalar(0.5);
 		const cupGap = d(cL, cR);
-		const tipsClose = indexGap < 0.32 && thumbGap < 0.36;
-		const cupsClose = cupGap < 0.30;
-		const onePairTouching = (indexGap < 0.18 || thumbGap < 0.18) && cupGap < 0.42;
+		const tipsClose = indexGap < 0.38 && thumbGap < 0.42;
+		const cupsClose = cupGap < 0.38;
+		const onePairTouching = (indexGap < 0.22 || thumbGap < 0.22) && cupGap < 0.50;
 		return tipsClose || cupsClose || onePairTouching;
+	}
+	heartHalvesJoined() {
+		const both = (this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0))
+			&& (this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0));
+		if (!both) return false;
+		if (this.heartSeatL && this.heartSeatR && this.heartSeatL.distanceTo(this.heartSeatR) < 0.42) return true;
+		const li = this.heartTipIndexL, ri = this.heartTipIndexR;
+		const lt = this.heartTipThumbL, rt = this.heartTipThumbR;
+		if (li && ri && lt && rt) {
+			if (li.distanceTo(ri) < 0.38 && lt.distanceTo(rt) < 0.42) return true;
+			const cL = li.clone().add(lt).multiplyScalar(0.5);
+			const cR = ri.clone().add(rt).multiplyScalar(0.5);
+			if (cL.distanceTo(cR) < 0.38) return true;
+		}
+		return false;
 	}
 	toggleMute() {
 		this.audio.setMuted(!this.audio.muted);
@@ -2318,12 +2339,15 @@ export class GloveFightEngine {
 		this.applyXrPointerPolicy();
 		this.xrHud = new THREE.Group();
 		this.xrHudCanvas = document.createElement("canvas");
-		this.xrHudCanvas.width = this.xrHeadset || this.isMobile ? 512 : 768;
-		this.xrHudCanvas.height = this.xrHeadset || this.isMobile ? 256 : 384;
+		this.xrHudCanvas.width = 1024;
+		this.xrHudCanvas.height = 600;
 		this.xrHudTex = new THREE.CanvasTexture(this.xrHudCanvas);
 		this.xrHudTex.colorSpace = THREE.SRGBColorSpace;
+		this.xrHudTex.minFilter = THREE.LinearFilter;
+		this.xrHudTex.magFilter = THREE.LinearFilter;
+		this.xrHudTex.generateMipmaps = false;
 		this.xrHudMesh = new THREE.Mesh(
-			new THREE.PlaneGeometry(0.72, 0.36),
+			new THREE.PlaneGeometry(0.78, 0.46),
 			new THREE.MeshBasicMaterial({
 				map: this.xrHudTex,
 				transparent: true,
@@ -2505,14 +2529,24 @@ export class GloveFightEngine {
 				const hm = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
 				const q = new THREE.Quaternion().setFromRotationMatrix(hm);
 				this.placeXrPropWorld(glove, mid, q);
-				if (side === "L") this.heartSeatL = mid.clone();
-				else this.heartSeatR = mid.clone();
+				if (side === "L") {
+					this.heartSeatL = mid.clone();
+					this.heartTipThumbL = thumbTip.clone();
+					this.heartTipIndexL = indexTip.clone();
+				} else {
+					this.heartSeatR = mid.clone();
+					this.heartTipThumbR = thumbTip.clone();
+					this.heartTipIndexR = indexTip.clone();
+				}
 				if (heart) {
 					heart.position.set(0, 0, 0.012 * towardCam);
 					heart.quaternion.identity();
 					heart.scale.setScalar(span * 1.08);
 				}
 			} else {
+				const sticky = this.time < (side === "L" ? this.heartStickyUntilL : this.heartStickyUntilR);
+				const lastSeat = side === "L" ? this.heartSeatL : this.heartSeatR;
+				if (sticky && lastSeat) return;
 				const camPos = new THREE.Vector3();
 				this.camera.getWorldPosition(camPos);
 				const seat = wrist.clone().add(new THREE.Vector3(0, 0.06, 0));
@@ -2932,11 +2966,12 @@ export class GloveFightEngine {
 		this.applyXrPointerPolicy();
 		this.applySkinnedHandVisibility();
 		if (frame && refSpace && xrHandL && xrHandR) {
-			const bothHalves = this.handGestureL === "heart" && this.handGestureR === "heart";
-			const connected = bothHalves && this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR);
+			const bothHalves = (this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0))
+				&& (this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0));
+			const connected = bothHalves && (this.heartHalvesJoined() || this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR));
 			if (connected) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + Math.max(0.016, dt || 0.016);
-				if (this.heartDetectHold > 0.06) {
+				if (this.heartDetectHold > 0.05) {
 					this.spawnHeartShield();
 					this.heartDetectHold = -0.9;
 				}
@@ -2950,15 +2985,30 @@ export class GloveFightEngine {
 		const holdKey = side === "L" ? "xrGestHoldL" : "xrGestHoldR";
 		const kindKey = side === "L" ? "xrGestKindL" : "xrGestKindR";
 		const heartFramesKey = side === "L" ? "xrHeartFramesL" : "xrHeartFramesR";
+		const stickyKey = side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
+		const otherStickyKey = side === "L" ? "heartStickyUntilR" : "heartStickyUntilL";
+		const otherGesture = side === "L" ? this.handGestureR : this.handGestureL;
 		const g = cls?.gesture;
+		const selfWasHeart = this[kindKey] === "heart" || (this[heartFramesKey] || 0) > 0
+			|| this.time < (this[stickyKey] || 0);
+		const otherIsHeart = otherGesture === "heart" || this.time < (this[otherStickyKey] || 0);
+		const joining = selfWasHeart && otherIsHeart;
+
 		if (g === "punch" || cls?.mode === "punch") {
-			// Closed fist is always punch — never a leftover half-heart.
+			// Hands occlude as the C's meet — Quest often reports a fist. Keep the heart.
+			if (joining) {
+				this.setHandGesture(side, "heart");
+				this[kindKey] = "heart";
+				this[heartFramesKey] = Math.max(this[heartFramesKey] || 0, 10);
+				this[holdKey] = Math.max(this[holdKey] || 0, 8);
+				return;
+			}
 			this[heartFramesKey] = 0;
 			this[kindKey] = null;
 			this[holdKey] = 0;
 			const curG = side === "L" ? this.handGestureL : this.handGestureR;
 			if (curG) this.setHandGesture(side, null);
-			this.hideHeartConnector();
+			if (!otherIsHeart) this.hideHeartConnector();
 			this.holdXRHandMode(side, "punch");
 			return;
 		}
@@ -2993,23 +3043,24 @@ export class GloveFightEngine {
 				this.holdXRHandMode(side, "punch");
 				return;
 			}
-			this[heartFramesKey] = Math.min(28, (this[heartFramesKey] || 0) + 4);
+			this[heartFramesKey] = Math.min(48, (this[heartFramesKey] || 0) + 6);
 			if (this[kindKey] !== "heart") this.pushMsg("♥ Half heart", 0.7);
 			this[kindKey] = "heart";
-			this[holdKey] = 22;
+			this[holdKey] = 28;
+			this[stickyKey] = this.time + 0.55;
 			this.setHandGesture(side, "heart");
 			return;
 		}
 		// Keep a single-hand half-heart through missed frames only — never through a fist.
-		if (this[kindKey] === "heart" || (this[heartFramesKey] || 0) > 0) {
+		if (this[kindKey] === "heart" || (this[heartFramesKey] || 0) > 0 || this.time < (this[stickyKey] || 0)) {
 			const hard = g === "peace" || g === "birdie" || g === "thumbs" || g === "thumbsDown"
 				|| g === "spock" || g === "rockOn" || cls?.mode === "slap"
 				|| (cls?.mode === "poke" && g !== "heart");
-			if (hard) {
+			if (hard && !joining) {
 				this[heartFramesKey] = 0;
 			} else {
 				this[heartFramesKey] = Math.max(0, (this[heartFramesKey] || 0) - 1);
-				if ((this[heartFramesKey] || 0) > 0) {
+				if ((this[heartFramesKey] || 0) > 0 || joining || this.time < (this[stickyKey] || 0)) {
 					this.setHandGesture(side, "heart");
 					this[kindKey] = "heart";
 					return;
@@ -3933,27 +3984,11 @@ export class GloveFightEngine {
 		this.rightGlove = new THREE.Group();
 		for (const m of Object.values(this.leftMeshes)) this.leftGlove.add(m);
 		for (const m of Object.values(this.rightMeshes)) this.rightGlove.add(m);
-		// Connecting beam for two-hand heart
-		this.heartConnectMesh = new THREE.Mesh(
-			new THREE.CylinderGeometry(0.012, 0.012, 1, 8),
-			new THREE.MeshBasicMaterial({
-				color: 0xff4d8d,
-				transparent: true,
-				opacity: 0.55,
-				depthWrite: false,
-			}),
-		);
+		// Connecting beam for two-hand heart (desktop overlay + XR world)
+		this.heartConnectMesh = this.makeHeartBeamMesh(0.012);
 		this.heartConnectMesh.visible = false;
 		this.overlayScene.add(this.heartConnectMesh);
-		this.heartWorldBeam = new THREE.Mesh(
-			new THREE.CylinderGeometry(0.018, 0.018, 1, 10),
-			new THREE.MeshBasicMaterial({
-				color: 0xff4d8d,
-				transparent: true,
-				opacity: 0,
-				depthWrite: false,
-			}),
-		);
+		this.heartWorldBeam = this.makeHeartBeamMesh(0.022);
 		this.heartWorldBeam.visible = false;
 		this.scene.add(this.heartWorldBeam);
 		this.overlayScene.add(this.leftGlove);
@@ -4006,19 +4041,12 @@ export class GloveFightEngine {
 	setHandGesture(side, gesture) {
 		const next = gesture && gesture !== "none" ? gesture : null;
 		if (side === "L") {
-			if (this.handGestureL === next) {
-				if (next !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
-				return;
-			}
+			if (this.handGestureL === next) return;
 			this.handGestureL = next;
 		} else {
-			if (this.handGestureR === next) {
-				if (next !== "heart" || this.handGestureL !== "heart") this.hideHeartConnector();
-				return;
-			}
+			if (this.handGestureR === next) return;
 			this.handGestureR = next;
 		}
-		if (this.handGestureL !== "heart" || this.handGestureR !== "heart") this.hideHeartConnector();
 		this.updateHandMeshes();
 		this.syncXrGloves();
 	}
@@ -4026,6 +4054,38 @@ export class GloveFightEngine {
 		if (this.heartConnectMesh) this.heartConnectMesh.visible = false;
 		if (this.heartWorldBeam) this.heartWorldBeam.visible = false;
 		this.heartGlow = 0;
+	}
+	makeHeartBeamMesh(radius) {
+		const g = new THREE.Group();
+		const mk = (r, color, opacity, order) => {
+			const m = new THREE.Mesh(
+				new THREE.CylinderGeometry(r, r, 1, 12),
+				new THREE.MeshBasicMaterial({
+					color,
+					transparent: true,
+					opacity,
+					depthWrite: false,
+					depthTest: false,
+					toneMapped: false,
+					blending: THREE.AdditiveBlending,
+					side: THREE.DoubleSide,
+				}),
+			);
+			m.renderOrder = order;
+			m.frustumCulled = false;
+			return m;
+		};
+		const halo = mk(radius * 2.6, 0xff9ec4, 0.22, 30);
+		const core = mk(radius, 0xff4d8d, 0.85, 31);
+		halo.name = "heartBeamHalo";
+		core.name = "heartBeamCore";
+		g.add(halo);
+		g.add(core);
+		g.userData.halo = halo;
+		g.userData.core = core;
+		g.frustumCulled = false;
+		g.renderOrder = 31;
+		return g;
 	}
 	bindInput() {
 		window.addEventListener("keydown", this.onKeyDown);
@@ -4455,9 +4515,9 @@ export class GloveFightEngine {
 		this.xrHudGlassMat = mat;
 		let geom;
 		try {
-			geom = new RoundedBoxGeometry(0.78, 0.40, 0.016, 6, 0.05);
+			geom = new RoundedBoxGeometry(0.86, 0.52, 0.016, 6, 0.055);
 		} catch {
-			geom = new THREE.BoxGeometry(0.78, 0.40, 0.016);
+			geom = new THREE.BoxGeometry(0.86, 0.52, 0.016);
 		}
 		const mesh = new THREE.Mesh(geom, mat);
 		mesh.position.z = -0.01;
@@ -4493,13 +4553,19 @@ export class GloveFightEngine {
 			return;
 		}
 
-		const r = 36;
-		ctx.fillStyle = "rgba(18, 28, 42, 0.16)";
-		ctx.strokeStyle = "rgba(255, 255, 255, 0.38)";
-		ctx.lineWidth = 4;
+		const W = c.width;
+		const H = c.height;
+		const pad = 56;
+		const innerW = W - pad * 2;
+		const waveStep = phase === "tutorial" && this.tutorialStep === "wave";
+		const countdownLook = phase === "readying" || (phase === "tutorial" && this.tutorialStep === "countdown");
+
+		ctx.fillStyle = "rgba(12, 20, 32, 0.28)";
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
+		ctx.lineWidth = 5;
 		ctx.beginPath();
-		if (typeof ctx.roundRect === "function") ctx.roundRect(24, 24, c.width - 48, c.height - 48, r);
-		else ctx.rect(24, 24, c.width - 48, c.height - 48);
+		if (typeof ctx.roundRect === "function") ctx.roundRect(28, 28, W - 56, H - 56, 42);
+		else ctx.rect(28, 28, W - 56, H - 56);
 		ctx.fill();
 		ctx.stroke();
 
@@ -4519,11 +4585,10 @@ export class GloveFightEngine {
 			sub = canCont ? "Punch for a harder level" : "Get ready…";
 			foot = "Wave " + this.wave + " · Score " + Math.floor(this.score).toLocaleString();
 		} else if (phase === "gameover") {
-			// Unused in endless prototype — kept as fallback
 			title = "STILL STANDING";
 			sub = "Punch to keep going";
 			foot = "Score " + Math.floor(this.score).toLocaleString();
-		} else if (phase === "readying" || (phase === "tutorial" && this.tutorialStep === "countdown")) {
+		} else if (countdownLook) {
 			const beat = this.xrIntroBeat || "3";
 			title = beat === "GO" ? "GO!" : beat;
 			sub = beat === "GO" ? "Fight!" : "Get ready";
@@ -4533,85 +4598,107 @@ export class GloveFightEngine {
 			title = spec?.title || "TUTORIAL";
 			sub = spec?.body || "";
 			const need = this.tutorialNeed || 0;
-			foot = this.tutorialStep === "wave"
-				? (this.waveWaving ? "Keep waving…" : "Wave to fill")
+			foot = waveStep
+				? (this.waveWaving ? "Keep waving…" : "Wave to fill the bar")
 				: need > 0
-					? (spec?.hint ? spec.hint + "  ·  " : "") + `${this.tutorialCount || 0} / ${need}`
+					? `${this.tutorialCount || 0} / ${need}` + (spec?.hint ? "  ·  " + spec.hint : "")
 					: (spec?.hint || "");
 		} else {
 			title = msg;
 		}
 
-		const countdownLook = phase === "readying" || (phase === "tutorial" && this.tutorialStep === "countdown");
 		ctx.textAlign = "center";
 		ctx.textBaseline = "middle";
-		ctx.shadowColor = "rgba(6, 10, 18, 0.72)";
-		ctx.shadowBlur = 12;
+		ctx.shadowColor = "rgba(6, 10, 18, 0.78)";
+		ctx.shadowBlur = 10;
 		ctx.shadowOffsetY = 2;
+
+		if (countdownLook) {
+			ctx.fillStyle = "#ffe08a";
+			ctx.font = "bold 210px system-ui, Segoe UI, sans-serif";
+			ctx.fillText(title, W / 2, H * 0.38, innerW);
+			if (sub) {
+				ctx.fillStyle = "#f4f1ea";
+				ctx.font = "42px system-ui, Segoe UI, sans-serif";
+				ctx.fillText(sub, W / 2, H * 0.68, innerW);
+			}
+			this.xrHudTex.needsUpdate = true;
+			return;
+		}
+
+		const meterH = waveStep ? 70 : 0;
+		const footH = foot ? 52 : 0;
+		const titleY = pad + 36;
 		ctx.fillStyle = "#ffe08a";
-		ctx.font = countdownLook
-			? "bold 160px system-ui, Segoe UI, sans-serif"
-			: phase === "tutorial"
-				? "bold 48px system-ui, Segoe UI, sans-serif"
-				: "bold 64px system-ui, Segoe UI, sans-serif";
-		ctx.fillText(title, c.width / 2, c.height * (countdownLook ? 0.38 : phase === "tutorial" ? 0.28 : 0.38), c.width - 80);
+		ctx.font = "bold 54px system-ui, Segoe UI, sans-serif";
+		ctx.fillText(title, W / 2, titleY, innerW);
+
+		const bodyTop = titleY + 48;
+		const bodyBot = H - pad - footH - meterH - (waveStep ? 18 : 8);
+		const bodyMaxH = Math.max(40, bodyBot - bodyTop);
 		if (sub) {
-			ctx.fillStyle = "#f2efe8";
-			ctx.font = phase === "tutorial" && !countdownLook
-				? "26px system-ui, Segoe UI, sans-serif"
-				: "32px system-ui, Segoe UI, sans-serif";
-			if (phase === "tutorial" && !countdownLook) {
-				const lines = this.wrapHudText(ctx, sub, c.width - 100);
-				const startY = c.height * 0.48;
-				for (let i = 0; i < lines.length; i++) {
-					ctx.fillText(lines[i], c.width / 2, startY + i * 32, c.width - 80);
+			ctx.fillStyle = "#f7f4ee";
+			let fontPx = phase === "tutorial" ? 32 : 36;
+			let lines = [];
+			for (; fontPx >= 24; fontPx -= 2) {
+				ctx.font = fontPx + "px system-ui, Segoe UI, sans-serif";
+				const lh = Math.round(fontPx * 1.28);
+				const maxLines = Math.max(1, Math.floor(bodyMaxH / lh));
+				lines = this.wrapHudText(ctx, sub, innerW, maxLines);
+				if (lines.length * lh <= bodyMaxH || fontPx === 24) {
+					const start = bodyTop + lh * 0.55;
+					for (let i = 0; i < lines.length; i++) {
+						ctx.fillText(lines[i], W / 2, start + i * lh, innerW);
+					}
+					break;
 				}
-			} else {
-				ctx.fillText(sub, c.width / 2, c.height * 0.58, c.width - 80);
 			}
 		}
-		if (foot) {
-			ctx.fillStyle = "rgba(242,239,232,0.78)";
-			ctx.font = "28px system-ui, Segoe UI, sans-serif";
-			ctx.fillText(foot, c.width / 2, c.height * (phase === "tutorial" && this.tutorialStep === "wave" ? 0.90 : 0.84), c.width - 80);
-		}
-		if (phase === "tutorial" && this.tutorialStep === "wave") {
+
+		if (waveStep) {
 			ctx.shadowColor = "transparent";
 			ctx.shadowBlur = 0;
 			ctx.shadowOffsetY = 0;
-			const bx = 90;
-			const by = c.height * 0.78;
-			const bw = c.width - 180;
-			const bh = 32;
+			const bx = pad + 24;
+			const bw = innerW - 48;
+			const bh = 48;
+			const by = H - pad - footH - bh - 8;
 			const pct = Math.max(0, Math.min(1, (this.waveMeter || 0) / (this.waveMeterMax || 5)));
-			ctx.fillStyle = "rgba(20,16,28,0.9)";
-			if (typeof ctx.roundRect === "function") {
-				ctx.beginPath();
-				ctx.roundRect(bx, by, bw, bh, 12);
-				ctx.fill();
-			} else ctx.fillRect(bx, by, bw, bh);
+			ctx.fillStyle = "rgba(16, 14, 24, 0.92)";
+			ctx.beginPath();
+			if (typeof ctx.roundRect === "function") ctx.roundRect(bx, by, bw, bh, 16);
+			else ctx.rect(bx, by, bw, bh);
+			ctx.fill();
 			ctx.fillStyle = this.waveWaving ? "#7dffa8" : "#ffe08a";
 			if (pct > 0.01) {
-				if (typeof ctx.roundRect === "function") {
-					ctx.beginPath();
-					ctx.roundRect(bx + 3, by + 3, Math.max(8, (bw - 6) * pct), bh - 6, 10);
-					ctx.fill();
-				} else ctx.fillRect(bx + 3, by + 3, (bw - 6) * pct, bh - 6);
-			}
-			ctx.strokeStyle = "rgba(255,224,138,0.7)";
-			ctx.lineWidth = 3;
-			if (typeof ctx.roundRect === "function") {
 				ctx.beginPath();
-				ctx.roundRect(bx, by, bw, bh, 12);
-				ctx.stroke();
-			} else ctx.strokeRect(bx, by, bw, bh);
+				const fw = Math.max(10, (bw - 8) * pct);
+				if (typeof ctx.roundRect === "function") ctx.roundRect(bx + 4, by + 4, fw, bh - 8, 12);
+				else ctx.rect(bx + 4, by + 4, fw, bh - 8);
+				ctx.fill();
+			}
+			ctx.strokeStyle = "rgba(255,224,138,0.75)";
+			ctx.lineWidth = 3;
+			ctx.beginPath();
+			if (typeof ctx.roundRect === "function") ctx.roundRect(bx, by, bw, bh, 16);
+			else ctx.rect(bx, by, bw, bh);
+			ctx.stroke();
 			ctx.fillStyle = "#1a1410";
-			ctx.font = "bold 22px system-ui, Segoe UI, sans-serif";
-			ctx.fillText("WAVEOMETER  " + (this.waveMeter || 0).toFixed(1) + " / 5.0", c.width / 2, by + bh * 0.55);
+			ctx.font = "bold 26px system-ui, Segoe UI, sans-serif";
+			ctx.textBaseline = "middle";
+			ctx.fillText("WAVEOMETER  " + (this.waveMeter || 0).toFixed(1) + " / 5.0", W / 2, by + bh * 0.52);
+		}
+
+		if (foot) {
+			ctx.shadowColor = "rgba(6, 10, 18, 0.7)";
+			ctx.shadowBlur = 8;
+			ctx.fillStyle = "rgba(242,239,232,0.9)";
+			ctx.font = "28px system-ui, Segoe UI, sans-serif";
+			ctx.fillText(foot, W / 2, H - pad - 18, innerW);
 		}
 		this.xrHudTex.needsUpdate = true;
 	}
-	wrapHudText(ctx, text, maxWidth) {
+	wrapHudText(ctx, text, maxWidth, maxLines = 5) {
 		const words = String(text || "").split(/\s+/);
 		const lines = [];
 		let line = "";
@@ -4623,7 +4710,13 @@ export class GloveFightEngine {
 			} else line = test;
 		}
 		if (line) lines.push(line);
-		return lines.slice(0, 5);
+		const cap = Math.max(1, maxLines);
+		if (lines.length <= cap) return lines;
+		const kept = lines.slice(0, cap);
+		let last = kept[cap - 1];
+		while (last.length > 3 && ctx.measureText(last + "…").width > maxWidth) last = last.slice(0, -1);
+		kept[cap - 1] = last.replace(/[.,;:\s]+$/, "") + "…";
+		return kept;
 	}
 	setPhase(p) {
 		this.phase = p;
@@ -4997,8 +5090,8 @@ export class GloveFightEngine {
 	heartPairGlow(a, b) {
 		if (!a || !b) return 0;
 		const d = a.distanceTo(b);
-		// Faint link from ~0.8m, full when the C's nearly touch
-		return THREE.MathUtils.clamp(1 - (d - 0.08) / 0.72, 0, 1);
+		// Faint from ~1.0m, full when the C openings are nearly touching
+		return THREE.MathUtils.clamp(1 - (d - 0.06) / 0.94, 0, 1);
 	}
 	handsCloseForHeart() {
 		const a = this.worldHandPos("L");
@@ -5007,17 +5100,31 @@ export class GloveFightEngine {
 		return a.distanceTo(b) < 0.18;
 	}
 	placeHeartBeam(mesh, a, b, glow) {
-		if (!mesh) return;
-		const dist = Math.max(0.04, a.distanceTo(b));
+		if (!mesh || !a || !b) return;
+		const dist = Math.max(0.05, a.distanceTo(b));
 		const mid = a.clone().add(b).multiplyScalar(0.5);
 		mesh.position.copy(mid);
-		mesh.scale.set(0.55 + glow * 2.4, dist, 0.55 + glow * 2.4);
+		mesh.scale.set(1, dist, 1);
 		mesh.lookAt(b);
 		mesh.rotateX(Math.PI / 2);
 		mesh.visible = true;
-		if (mesh.material) {
-			mesh.material.opacity = 0.1 + glow * 0.88;
-			if (mesh.material.color) mesh.material.color.setHex(glow > 0.75 ? 0xffe0ef : 0xff4d8d);
+		const t = THREE.MathUtils.clamp(glow, 0, 1);
+		const color = t > 0.72 ? 0xffe8f4 : t > 0.4 ? 0xff8ab8 : 0xff4d8d;
+		const apply = (child, baseOp, extra) => {
+			if (!child?.material) return;
+			child.material.opacity = baseOp + t * extra;
+			if (child.material.color) child.material.color.setHex(color);
+			child.visible = true;
+		};
+		if (mesh.userData?.core) {
+			apply(mesh.userData.core, 0.28, 0.7);
+			apply(mesh.userData.halo, 0.1, 0.55);
+			const fat = 0.7 + t * 2.2;
+			mesh.userData.core.scale.set(fat, 1, fat);
+			mesh.userData.halo.scale.set(fat * 1.15, 1, fat * 1.15);
+		} else if (mesh.material) {
+			mesh.material.opacity = 0.12 + t * 0.86;
+			if (mesh.material.color) mesh.material.color.setHex(color);
 		}
 	}
 	heartMeshFor(side) {
@@ -5025,12 +5132,14 @@ export class GloveFightEngine {
 		return side === "L" ? this.leftMeshes?.heart : this.rightMeshes?.heart;
 	}
 	updateHeartGlow(dt) {
-		const bothLocal = this.handGestureL === "heart" && this.handGestureR === "heart";
+		const stickyL = this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0);
+		const stickyR = this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0);
+		const bothLocal = stickyL && stickyR;
 		const halves = [];
-		if (this.handGestureL === "heart") {
+		if (stickyL) {
 			halves.push({ who: "meL", local: true, side: "L", pos: this.heartSeatL || this.worldHandPos("L"), mesh: this.heartMeshFor("L") });
 		}
-		if (this.handGestureR === "heart") {
+		if (stickyR) {
 			halves.push({ who: "meR", local: true, side: "R", pos: this.heartSeatR || this.worldHandPos("R"), mesh: this.heartMeshFor("R") });
 		}
 		for (const rec of this.partyRemotes.values()) {
@@ -5089,22 +5198,21 @@ export class GloveFightEngine {
 			if (h.mesh && !shown.has(h.mesh)) setHeartHalfGlow(h.mesh, 0.1);
 		}
 		const distPair = bestPair[0].pos.distanceTo(bestPair[1].pos);
-		const localOnly = !!(bestPair[0].local && bestPair[1].local && !this.xrActive);
 		if (this.heartGlow > 0.4 && this.time - (this._heartChargeAt || 0) > 0.16) {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
 		}
-		const closeEnoughToShowBeam = bothLocal || (distPair < 0.85 && this.heartGlow > 0.02);
-		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.22) : this.heartGlow;
+		const closeEnoughToShowBeam = bothLocal || (distPair < 1.1 && this.heartGlow > 0.015);
+		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.28) : this.heartGlow;
 		if (closeEnoughToShowBeam) {
-			if (localOnly && this.heartConnectMesh) {
+			if (!this.xrActive && this.heartConnectMesh) {
 				this.placeHeartBeam(this.heartConnectMesh, this.leftPos.clone(), this.rightPos.clone(), displayGlow);
 			} else if (this.heartConnectMesh) {
 				this.heartConnectMesh.visible = false;
 			}
-			if (!localOnly && this.heartWorldBeam) {
+			if (this.xrActive && this.heartWorldBeam) {
 				this.placeHeartBeam(this.heartWorldBeam, bestPair[0].pos, bestPair[1].pos, displayGlow);
-			} else if (this.heartWorldBeam) {
+			} else if (!this.xrActive && this.heartWorldBeam) {
 				this.heartWorldBeam.visible = false;
 			}
 		} else {
@@ -5112,12 +5220,11 @@ export class GloveFightEngine {
 			if (this.heartWorldBeam) this.heartWorldBeam.visible = false;
 		}
 		const involvesRemote = !!(bestPair && (!bestPair[0].local || !bestPair[1].local));
-		const bothLocalHeart = this.handGestureL === "heart" && this.handGestureR === "heart";
-		const localTouch = bothLocalHeart && distPair < 0.30;
-		const remoteTouch = involvesRemote && distPair < 0.18;
+		const localTouch = bothLocal && distPair < 0.42;
+		const remoteTouch = involvesRemote && distPair < 0.22;
 		if (localTouch || remoteTouch) {
 			this.heartDetectHold = (this.heartDetectHold || 0) + (dt || 0.016);
-			if (this.heartDetectHold > 0.08) {
+			if (this.heartDetectHold > 0.05) {
 				const mid = bestPair[0].pos.clone().add(bestPair[1].pos).multiplyScalar(0.5);
 				this.spawnHeartShield(involvesRemote ? mid : null);
 				this.heartDetectHold = -0.9;
