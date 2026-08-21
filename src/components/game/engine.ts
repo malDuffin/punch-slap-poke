@@ -99,8 +99,8 @@ const TUTORIAL_SCRIPT = {
 	poke: {
 		lock: "poke", need: 3,
 		title: "SCISSORS",
-		body: "Index and middle STRAIGHT out. Ignore the thumb. Ring and pinky half or fully bent. Point them FORWARD (not up). Then jab three times.",
-		hint: "Two fingers straight, forward",
+		body: "Index and middle out — they can sit together or spread into a V. Ring and pinky bent. Point them FORWARD (not up). Open the two fingers, then snip them together three times.",
+		hint: "Open the V, then snip",
 	},
 	heart: {
 		lock: "heart", need: 1,
@@ -415,6 +415,8 @@ export class GloveFightEngine {
 	clickGlowR = 0;
 	xrClickStateL = null;
 	xrClickStateR = null;
+	xrSnipL = null;
+	xrSnipR = null;
 	rightReturnAt = 0;
 	viewHandFillOpacity = 0.36;
 	lastTrackFrame = null;
@@ -2792,6 +2794,15 @@ export class GloveFightEngine {
 				}
 				this.applyXrSocialGesture(side, cls);
 				if (this.detectXRFingerClick(frame, refSpace, source.hand, side)) this.armClickBoost(side);
+				const snip = this.detectXRScissorSnip(frame, refSpace, source.hand, side);
+				if (snip) {
+					this.tryAttack(side, {
+						forceMode: "poke",
+						strikePower: snip.power,
+						handSpeed: snip.speed,
+						fromMotion: true,
+					});
+				}
 				const wrist = source.hand.get?.("wrist") || source.hand.get("wrist");
 				if (!wrist) continue;
 				const pose = safeGetJointPose(frame, wrist, refSpace);
@@ -3057,6 +3068,16 @@ export class GloveFightEngine {
 			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
 			return cos > -0.22 || tipD < pipD * 1.14;
 		};
+		// Scissor blades: extended, even if abducted / slightly curved.
+		const fingerBlade = (tip, pip, mcp) => {
+			if (!tip) return false;
+			const mcpP = mcp || wrist;
+			const pipP = pip || mcpP;
+			const cos = pip ? bendCos(tip, pipP, mcpP) : -1;
+			const tipD = dist(wrist, tip);
+			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
+			return tipD > pipD * 1.02 && tipD > palm * 1.05 && cos < 0.12;
+		};
 		const ext = (tip, pip) => {
 			if (!tip) return false;
 			const tipD = dist(wrist, tip);
@@ -3120,19 +3141,25 @@ export class GloveFightEngine {
 			return { mode: "punch", gesture: "punch", curl: n };
 		}
 
-		// Scissors: index + middle STRAIGHT out. Ignore thumb.
-		// Ring + pinky half-bent or fully bent. Pointing up = peace, forward = scissors.
-		if (indexStraight && middleStraight && ringTucked && pinkyTucked) {
-			const dx = indexTip.x - wrist.x;
-			const dy = indexTip.y - wrist.y;
-			const dz = indexTip.z - wrist.z;
-			const len = Math.max(1e-5, Math.hypot(dx, dy, dz));
-			const upAmt = dy / len;
-			const horiz = Math.hypot(dx, dz);
-			if (upAmt > 0.62 && horiz < Math.abs(dy) * 1.05) {
-				return { mode: null, gesture: "peace", curl: n };
+		// Scissors: index + middle OUT (together or a wide V). Ring + pinky not straight.
+		// Pointing up = peace, forward = scissors pose (snip to fire).
+		{
+			const indexBlade = fingerBlade(indexTip, indexPip, indexMcpJ);
+			const middleBlade = fingerBlade(middleTip, middlePip, middleMcp);
+			const ringIn = !fingerStraight(ringTip, ringPip, ringMcp) && !fingerOpen(ringTip, ringPip, ringMcp, ringDip);
+			const pinkyIn = !fingerStraight(pinkyTip, pinkyPip, pinkyMcp) && !fingerOpen(pinkyTip, pinkyPip, pinkyMcp, pinkyDip);
+			if (indexBlade && middleBlade && ringIn && pinkyIn) {
+				const dx = indexTip.x - wrist.x;
+				const dy = indexTip.y - wrist.y;
+				const dz = indexTip.z - wrist.z;
+				const len = Math.max(1e-5, Math.hypot(dx, dy, dz));
+				const upAmt = dy / len;
+				const horiz = Math.hypot(dx, dz);
+				if (upAmt > 0.62 && horiz < Math.abs(dy) * 1.05) {
+					return { mode: null, gesture: "peace", curl: n };
+				}
+				return { mode: "poke", gesture: "poke", curl: n };
 			}
-			return { mode: "poke", gesture: "poke", curl: n };
 		}
 
 		// Half-heart: ONLY thumb + index. Middle / ring / pinky are ignored completely.
@@ -3236,6 +3263,101 @@ export class GloveFightEngine {
 		}
 		st.lastDist = d;
 		return clicked;
+	}
+	/**
+	 * Scissors fire on a SNIP: index + middle open into a V, then close together.
+	 * A forward punch with the scissors pose does not shoot.
+	 */
+	detectXRScissorSnip(frame, refSpace, hand, side) {
+		const joint = (name) => {
+			const j = hand.get?.(name) || hand.get(name);
+			if (!j) return null;
+			const pose = safeGetJointPose(frame, j, refSpace);
+			return pose ? pose.transform.position : null;
+		};
+		const indexTip = joint("index-finger-tip");
+		const middleTip = joint("middle-finger-tip");
+		const ringTip = joint("ring-finger-tip");
+		const pinkyTip = joint("pinky-finger-tip");
+		const wrist = joint("wrist");
+		const indexPip = joint("index-finger-phalanx-proximal");
+		const middlePip = joint("middle-finger-phalanx-proximal");
+		const ringPip = joint("ring-finger-phalanx-proximal");
+		const pinkyPip = joint("pinky-finger-phalanx-proximal");
+		const indexMcp = joint("index-finger-metacarpal") || indexPip;
+		const middleMcp = joint("middle-finger-metacarpal") || middlePip;
+		const ringMcp = joint("ring-finger-metacarpal") || ringPip;
+		const pinkyMcp = joint("pinky-finger-metacarpal") || pinkyPip;
+		if (!indexTip || !middleTip || !wrist) return null;
+		const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+		const midMet = joint("middle-finger-metacarpal") || middlePip || middleTip;
+		const palm = Math.max(0.04, dist(wrist, midMet));
+		const bendCos = (tip, pip, mcp) => {
+			if (!tip || !pip || !mcp) return 1;
+			const ax = mcp.x - pip.x, ay = mcp.y - pip.y, az = mcp.z - pip.z;
+			const bx = tip.x - pip.x, by = tip.y - pip.y, bz = tip.z - pip.z;
+			const al = Math.hypot(ax, ay, az), bl = Math.hypot(bx, by, bz);
+			if (al < 1e-5 || bl < 1e-5) return 1;
+			return (ax * bx + ay * by + az * bz) / (al * bl);
+		};
+		const blade = (tip, pip, mcp) => {
+			if (!tip) return false;
+			const mcpP = mcp || wrist;
+			const pipP = pip || mcpP;
+			const cos = pip ? bendCos(tip, pipP, mcpP) : -1;
+			const tipD = dist(wrist, tip);
+			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
+			return tipD > pipD * 1.02 && tipD > palm * 1.05 && cos < 0.12;
+		};
+		const notOpen = (tip, pip, mcp) => {
+			if (!tip) return true;
+			const mcpP = mcp || wrist;
+			const pipP = pip || mcpP;
+			const cos = pip ? bendCos(tip, pipP, mcpP) : 1;
+			const tipD = dist(wrist, tip);
+			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
+			return !(cos < -0.48 && tipD > pipD * 1.08 && tipD > palm * 1.18);
+		};
+		const blades = blade(indexTip, indexPip, indexMcp) && blade(middleTip, middlePip, middleMcp)
+			&& notOpen(ringTip, ringPip, ringMcp) && notOpen(pinkyTip, pinkyPip, pinkyMcp);
+		const gap = dist(indexTip, middleTip);
+		const now = this.time || 0;
+		const key = side === "L" ? "xrSnipL" : "xrSnipR";
+		let st = this[key];
+		if (!st) st = this[key] = { open: false, peakGap: 0, lastGap: gap, cdUntil: 0, t: now };
+		const dt = Math.min(0.08, Math.max(0.006, now - (st.t || now)));
+		st.t = now;
+		if (now < (st.cdUntil || 0)) {
+			st.lastGap = gap;
+			return null;
+		}
+		if (!blades) {
+			if (!blade(indexTip, indexPip, indexMcp) || !blade(middleTip, middlePip, middleMcp)) {
+				st.open = false;
+				st.peakGap = 0;
+			}
+			st.lastGap = gap;
+			return null;
+		}
+		const OPEN = palm * 0.40;
+		const CLOSE = palm * 0.20;
+		const MIN_PEAK = palm * 0.44;
+		if (gap > OPEN) {
+			st.open = true;
+			st.peakGap = Math.max(st.peakGap || 0, gap);
+		}
+		const vel = ((st.lastGap || gap) - gap) / dt;
+		const crossed = st.open && (st.peakGap || 0) >= MIN_PEAK && (st.lastGap || 0) >= CLOSE && gap < CLOSE;
+		const snipped = crossed && vel > 0.08;
+		st.lastGap = gap;
+		if (!snipped) return null;
+		const travel = Math.max(0.01, (st.peakGap || gap) - gap);
+		st.open = false;
+		st.peakGap = 0;
+		st.cdUntil = now + 0.28;
+		const power = THREE.MathUtils.clamp(0.32 + travel * 7 + vel * 0.12, 0.3, 1.4);
+		const speed = THREE.MathUtils.clamp(7 + vel * 3.5 + travel * 18, 5, 32);
+		return { power, speed, travel, vel };
 	}
 	/**
 	 * XR motion: forward punch, wrist snap slap, or full-arm sweep slap.
@@ -3409,6 +3531,10 @@ export class GloveFightEngine {
 						this.tryAttack(side, { forceMode: "grenade", strikePower: power, handSpeed, fromMotion: true });
 					} else {
 						const poseMode = this.shotModeForHand(side);
+						if (poseMode === "poke") {
+							this[swingKey] = null;
+							return;
+						}
 						const shot = poseMode || (swing.kind === "punch" ? "punch" : "slap");
 						const style = swing.kind === "wrist" ? "wrist" : swing.kind === "sweep" ? "sweep" : null;
 						if (shot === "slap") {
@@ -7406,6 +7532,15 @@ export class GloveFightEngine {
 					this[prevK] = pos;
 				}
 				if (h.click) this.armClickBoost(h.side);
+				if (h.snip) {
+					const sp = THREE.MathUtils.clamp(h.snipPower || 0.7, 0.3, 1.4);
+					this.tryAttack(h.side, {
+						forceMode: "poke",
+						strikePower: sp,
+						handSpeed: THREE.MathUtils.clamp(8 + sp * 14, 6, 28),
+						fromMotion: true,
+					});
+				}
 				// Social / emoji gesture props (hide combat models while held)
 				const social = ["thumbs", "thumbsDown", "spock", "rockOn", "heart", "birdie"];
 				if (h.gesture === "heart") {
@@ -7474,6 +7609,7 @@ export class GloveFightEngine {
 					const strikePower = THREE.MathUtils.clamp(0.25 + mag * 0.95, 0.25, 1.35);
 					const shot = this.shotModeForHand(h.side)
 						|| (h.mode === "punch" || h.mode === "slap" || h.mode === "poke" ? h.mode : "punch");
+					if (shot === "poke") continue;
 					const opts = { strikePower, fromMotion: true, forceMode: shot };
 					if (shot === "slap") {
 						opts.slapStyle = Math.abs(h.swipe || 0) > 0.55 ? "sweep" : "wrist";

@@ -71,6 +71,10 @@ export interface TrackedHand {
   lift: number;
   /** Finger-click / snap (thumb+middle) this frame */
   click: boolean;
+  /** Scissors snip (index+middle closed together) this frame */
+  snip: boolean;
+  /** 0–1 snip strength when snip is true */
+  snipPower: number;
   /** All 21 landmarks in mirrored space for skeleton overlay */
   landmarks: TrackedLandmark[];
   /** Raw unmirrored wrist for debug */
@@ -148,6 +152,22 @@ function fingerStraight(lm: NormalizedLandmark[], tip: number, pip: number, mcp:
 
 function fingerTucked(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
   return !fingerStraight(lm, tip, pip, mcp);
+}
+
+function fingerBlade(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
+  const wrist = lm[0]!;
+  const t = lm[tip]!;
+  const p = lm[pip]!;
+  const m = lm[mcp]!;
+  const ax = m.x - p.x, ay = m.y - p.y, az = (m.z ?? 0) - (p.z ?? 0);
+  const bx = t.x - p.x, by = t.y - p.y, bz = (t.z ?? 0) - (p.z ?? 0);
+  const al = Math.hypot(ax, ay, az), bl = Math.hypot(bx, by, bz);
+  if (al < 1e-5 || bl < 1e-5) return false;
+  const cos = (ax * bx + ay * by + az * bz) / (al * bl);
+  const tipD = dist(wrist, t);
+  const pipD = dist(wrist, p);
+  const palm = dist(lm[5]!, lm[17]!) || 0.08;
+  return tipD > pipD * 1.02 && tipD > palm * 0.78 && cos < 0.15;
 }
 
 function fingerOpen(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
@@ -262,12 +282,12 @@ function classifyRps(lm: NormalizedLandmark[]): {
     }
   }
 
-  // Scissors before heart: two fingers STRAIGHT, other two tucked (half or full). Ignore thumb.
+  // Scissors: two blades OUT (together or a wide V), other two not straight. Ignore thumb.
   {
-    const indexS = fingerStraight(lm, 8, 6, 5);
-    const middleS = fingerStraight(lm, 12, 10, 9);
-    const ringT = fingerTucked(lm, 16, 14, 13);
-    const pinkyT = fingerTucked(lm, 20, 18, 17);
+    const indexS = fingerBlade(lm, 8, 6, 5);
+    const middleS = fingerBlade(lm, 12, 10, 9);
+    const ringT = !fingerStraight(lm, 16, 14, 13) && !fingerOpen(lm, 16, 14, 13);
+    const pinkyT = !fingerStraight(lm, 20, 18, 17) && !fingerOpen(lm, 20, 18, 17);
     if (indexS && middleS && ringT && pinkyT) {
       const indexTip = lm[8]!;
       const wristLm = lm[0]!;
@@ -322,10 +342,10 @@ function classifyRps(lm: NormalizedLandmark[]): {
     return { gesture: "slap", mode: "slap", confidence: 0.9, label: "paper" };
   }
 
-  // Scissors already handled with a straight-finger test above.
+  // Scissors already handled with a blade test above.
   if (index && middle && !ring && !pinky) {
-    const indexS = fingerStraight(lm, 8, 6, 5);
-    const middleS = fingerStraight(lm, 12, 10, 9);
+    const indexS = fingerBlade(lm, 8, 6, 5);
+    const middleS = fingerBlade(lm, 12, 10, 9);
     if (indexS && middleS) {
       const indexTip = lm[8]!;
       const wristLm = lm[0]!;
@@ -455,6 +475,13 @@ export class HandCameraTracker {
     cdUntil: number;
     thumbY: number;
     fingerY: number;
+  }>();
+  private snipState = new Map<"L" | "R", {
+    open: boolean;
+    peakGap: number;
+    lastGap: number;
+    cdUntil: number;
+    t: number;
   }>();
 
   constructor() {
@@ -725,6 +752,7 @@ export class HandCameraTracker {
       const palmFacing = computePalmFacing(lm, handed?.categoryName || (side === "R" ? "Right" : "Left"));
       const motion = this.detectStrike(side, size, z, my, mx, palmFacing, nowMs);
       const fingerClick = this.detectFingerClick(side, lm, nowMs);
+      const snipInfo = this.detectScissorSnip(side, lm, nowMs, mode === "poke" || gesture === "poke");
 
       // Mirrored landmarks for skeleton overlay
       const landmarks: TrackedLandmark[] = lm.map((p) => ({
@@ -754,6 +782,8 @@ export class HandCameraTracker {
         swipe: motion.swipe,
         lift: motion.lift,
         click: fingerClick,
+        snip: snipInfo.snip,
+        snipPower: snipInfo.power,
         score,
         landmarks,
         wristX: wrist.x,
@@ -841,6 +871,59 @@ export class HandCameraTracker {
     }
     st.lastDist = d;
     return clicked;
+  }
+
+  /** Index + middle open into a V, then close together → scissors shot. */
+  private detectScissorSnip(
+    side: "L" | "R",
+    lm: NormalizedLandmark[],
+    nowMs: number,
+    blades: boolean,
+  ): { snip: boolean; power: number } {
+    const index = lm[8];
+    const middle = lm[12];
+    if (!index || !middle) return { snip: false, power: 0 };
+    const palm = palmSize(lm) || 0.1;
+    const gap = dist(index, middle);
+    let st = this.snipState.get(side);
+    if (!st) {
+      st = { open: false, peakGap: 0, lastGap: gap, cdUntil: 0, t: nowMs };
+      this.snipState.set(side, st);
+    }
+    const dt = Math.min(0.08, Math.max(0.008, (nowMs - (st.t || nowMs)) / 1000));
+    st.t = nowMs;
+    if (nowMs < st.cdUntil) {
+      st.lastGap = gap;
+      return { snip: false, power: 0 };
+    }
+    if (!blades) {
+      const indexOut = fingerBlade(lm, 8, 6, 5);
+      const middleOut = fingerBlade(lm, 12, 10, 9);
+      if (!indexOut || !middleOut) {
+        st.open = false;
+        st.peakGap = 0;
+      }
+      st.lastGap = gap;
+      return { snip: false, power: 0 };
+    }
+    const OPEN = palm * 0.42;
+    const CLOSE = palm * 0.22;
+    const MIN_PEAK = palm * 0.48;
+    if (gap > OPEN) {
+      st.open = true;
+      st.peakGap = Math.max(st.peakGap || 0, gap);
+    }
+    const vel = ((st.lastGap || gap) - gap) / dt;
+    const crossed = st.open && (st.peakGap || 0) >= MIN_PEAK && (st.lastGap || 0) >= CLOSE && gap < CLOSE;
+    const snipped = crossed && vel > 0.08;
+    st.lastGap = gap;
+    if (!snipped) return { snip: false, power: 0 };
+    const travel = Math.max(0.01, (st.peakGap || gap) - gap);
+    st.open = false;
+    st.peakGap = 0;
+    st.cdUntil = nowMs + 280;
+    const power = Math.max(0.3, Math.min(1.35, 0.32 + travel * 6 + vel * 0.1));
+    return { snip: true, power };
   }
 
   private detectStrike(
