@@ -1436,6 +1436,9 @@ export class GloveFightEngine {
 	}
 	/** Live combat pose at fire time — flying copy must match fist / open palm / scissors. */
 	shotModeForHand(hand) {
+		if (this.phase === "tutorial" && (this.tutorialLockMode === "punch" || this.tutorialLockMode === "slap" || this.tutorialLockMode === "poke")) {
+			return this.isTutorialShape(hand, this.tutorialLockMode) ? this.tutorialLockMode : null;
+		}
 		const live = this.liveHandClass(hand);
 		if (live?.mode === "punch" || live?.mode === "slap" || live?.mode === "poke") return live.mode;
 		const held = this.getHandMode(hand);
@@ -1710,6 +1713,7 @@ export class GloveFightEngine {
 		return false;
 	}
 	detectTwoHandHeartXR(frame, refSpace, handL, handR) {
+		const join = 0.2;
 		const wp = (hand, name) => {
 			const j = hand?.get?.(name) || hand?.get(name);
 			if (!j) return null;
@@ -1724,7 +1728,7 @@ export class GloveFightEngine {
 		const rt = wp(handR, "thumb-tip") || this.heartTipThumbR;
 		const ha = this.heartHalfWorldPos("L");
 		const hb = this.heartHalfWorldPos("R");
-		if (ha && hb && ha.distanceTo(hb) < 0.88) return true;
+		if (ha && hb && ha.distanceTo(hb) <= join) return true;
 		if (!li || !ri || !lt || !rt) return false;
 		const d = (p, q) => p.distanceTo(q);
 		const indexGap = d(li, ri);
@@ -1732,8 +1736,7 @@ export class GloveFightEngine {
 		const cL = li.clone().add(lt).multiplyScalar(0.5);
 		const cR = ri.clone().add(rt).multiplyScalar(0.5);
 		const cupGap = d(cL, cR);
-		return (indexGap < 0.55 && thumbGap < 0.62) || cupGap < 0.72
-			|| ((indexGap < 0.32 || thumbGap < 0.32) && cupGap < 0.9);
+		return cupGap <= join || (indexGap <= join && thumbGap <= join * 1.1);
 	}
 	heartHalfWorldPos(side) {
 		const mesh = this.heartMeshFor(side);
@@ -1755,19 +1758,17 @@ export class GloveFightEngine {
 	}
 	heartHalvesJoined() {
 		if (!this.heartHalvesShowing()) return false;
+		const join = 0.2;
 		const a = this.heartHalfWorldPos("L");
 		const b = this.heartHalfWorldPos("R");
-		if (a && b && a.distanceTo(b) < 0.88) return true;
-		const wl = this.worldHandPos("L");
-		const wr = this.worldHandPos("R");
-		if (wl && wr && wl.distanceTo(wr) < 0.62) return true;
+		if (a && b && a.distanceTo(b) <= join) return true;
 		const li = this.heartTipIndexL, ri = this.heartTipIndexR;
 		const lt = this.heartTipThumbL, rt = this.heartTipThumbR;
 		if (li && ri && lt && rt) {
-			if (li.distanceTo(ri) < 0.55 && lt.distanceTo(rt) < 0.62) return true;
+			if (li.distanceTo(ri) <= join && lt.distanceTo(rt) <= join * 1.1) return true;
 			const cL = li.clone().add(lt).multiplyScalar(0.5);
 			const cR = ri.clone().add(rt).multiplyScalar(0.5);
-			if (cL.distanceTo(cR) < 0.72) return true;
+			if (cL.distanceTo(cR) <= join) return true;
 		}
 		return false;
 	}
@@ -3042,6 +3043,16 @@ export class GloveFightEngine {
 		const holdKey = side === "L" ? "xrGestHoldL" : "xrGestHoldR";
 		const kindKey = side === "L" ? "xrGestKindL" : "xrGestKindR";
 		const heartFramesKey = side === "L" ? "xrHeartFramesL" : "xrHeartFramesR";
+		const lock = this.phase === "tutorial" ? this.tutorialLockMode : null;
+		if (lock === "punch" || lock === "slap" || lock === "poke") {
+			this[heartFramesKey] = 0;
+			this[kindKey] = null;
+			this[holdKey] = 0;
+			const curG = side === "L" ? this.handGestureL : this.handGestureR;
+			if (curG) this.setHandGesture(side, null);
+			this.holdXRHandMode(side, lock);
+			return;
+		}
 		const stickyKey = side === "L" ? "heartStickyUntilL" : "heartStickyUntilR";
 		const otherStickyKey = side === "L" ? "heartStickyUntilR" : "heartStickyUntilL";
 		const otherGesture = side === "L" ? this.handGestureR : this.handGestureL;
@@ -4064,10 +4075,7 @@ export class GloveFightEngine {
 			const step = this.tutorialStep;
 			if (step === "wave" || lock === "wave") return null;
 			if (lock === "punch" || lock === "slap" || lock === "poke") {
-				if (this.isTutorialShape(side, lock)) return lock;
-				const live = this.liveHandClass(side);
-				if (live?.mode === "punch" || live?.mode === "slap" || live?.mode === "poke") return live.mode;
-				return lock;
+				return this.isTutorialShape(side, lock) ? lock : null;
 			}
 			if (lock === "heart") return this.isTutorialShape(side, "heart") ? "heart" : null;
 		}
@@ -5158,8 +5166,8 @@ export class GloveFightEngine {
 	heartPairGlow(a, b) {
 		if (!a || !b) return 0;
 		const d = a.distanceTo(b);
-		// Hot from ~0.9m, full when the C openings nearly close
-		return THREE.MathUtils.clamp(1 - (d - 0.05) / 1.05, 0, 1);
+		// Beam from ~0.5 m, full at a hand-width (~0.12 m)
+		return THREE.MathUtils.clamp(1 - (d - 0.1) / 0.4, 0, 1);
 	}
 	handsCloseForHeart() {
 		const a = this.worldHandPos("L");
@@ -5288,8 +5296,8 @@ export class GloveFightEngine {
 			this._heartChargeAt = this.time;
 			if (this.audio.heartCharge) this.audio.heartCharge(this.heartGlow);
 		}
-		const closeEnoughToShowBeam = bothLocal || (distPair < 1.35 && this.heartGlow > 0.01);
-		const displayGlow = bothLocal ? Math.max(this.heartGlow, 0.35) : this.heartGlow;
+		const closeEnoughToShowBeam = bothLocal && distPair < 0.5 && this.heartGlow > 0.02;
+		const displayGlow = Math.max(this.heartGlow, distPair < 0.28 ? 0.4 : 0.18);
 		if (closeEnoughToShowBeam) {
 			if (!this.xrActive && this.heartConnectMesh) {
 				this.placeHeartBeam(this.heartConnectMesh, this.leftPos.clone(), this.rightPos.clone(), displayGlow);
@@ -5317,8 +5325,8 @@ export class GloveFightEngine {
 			if (this.heartCamBeam) this.heartCamBeam.visible = false;
 		}
 		const involvesRemote = !!(bestPair && (!bestPair[0].local || !bestPair[1].local));
-		const localTouch = bothLocal && (distPair < 0.88 || this.heartHalvesJoined());
-		const remoteTouch = involvesRemote && distPair < 0.28;
+		const localTouch = bothLocal && (distPair <= 0.2 || this.heartHalvesJoined());
+		const remoteTouch = involvesRemote && distPair < 0.16;
 		if (localTouch || remoteTouch) {
 			this.heartDetectHold = (this.heartDetectHold || 0) + (dt || 0.016);
 			if (this.heartDetectHold > 0.04) {
@@ -7892,7 +7900,11 @@ export class GloveFightEngine {
 				}
 				// Social / emoji gesture props (hide combat models while held)
 				const social = ["thumbs", "thumbsDown", "spock", "rockOn", "heart", "birdie"];
-				if (h.gesture === "heart") {
+				const combatLock = this.phase === "tutorial" && (this.tutorialLockMode === "punch" || this.tutorialLockMode === "slap" || this.tutorialLockMode === "poke");
+				if (combatLock) {
+					const curG = h.side === "L" ? this.handGestureL : this.handGestureR;
+					if (curG) this.setHandGesture(h.side, null);
+				} else if (h.gesture === "heart") {
 					if (this.phase === "tutorial" && this.tutorialLockMode !== "heart") continue;
 					const fk = h.side === "L" ? "camHeartFramesL" : "camHeartFramesR";
 					this[fk] = Math.min(24, (this[fk] || 0) + 4);
