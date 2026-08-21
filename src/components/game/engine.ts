@@ -2122,18 +2122,19 @@ export class GloveFightEngine {
 			const mats = Array.isArray(o.material) ? o.material : [o.material];
 			for (const m of mats) {
 				m.transparent = true;
-				m.opacity = 0.4;
+				m.opacity = 0.62;
 				m.depthWrite = false;
-				m.side = THREE.FrontSide;
-				if (m.color) m.color.setHex(0xb7e4ff);
+				m.side = THREE.DoubleSide;
+				if (m.color) m.color.setHex(0xc8ecff);
 				if ("emissive" in m) {
-					m.emissive.setHex(0x2a6aa8);
-					m.emissiveIntensity = 0.45;
+					m.emissive.setHex(0x3a88c8);
+					m.emissiveIntensity = 0.4;
 				}
 			}
-			o.renderOrder = 24;
-			o.frustumCulled = true;
+			o.renderOrder = 22;
+			o.frustumCulled = false;
 			o.castShadow = false;
+			o.receiveShadow = false;
 		});
 	}
 	applySkinnedHandVisibility() {
@@ -2143,10 +2144,16 @@ export class GloveFightEngine {
 		// wrist/palm joints stay visible even if the ghost mesh is toggled off.
 		for (const i of [0, 1]) {
 			const h = this.xrSkinnedHands?.[i];
-			if (h) h.visible = xrOn;
+			if (h) {
+				h.visible = xrOn;
+				h.traverse((o) => { o.frustumCulled = false; });
+			}
 		}
 		for (const m of this.xrSkinnedModels || []) {
-			if (m) m.visible = ghostOn;
+			if (!m) continue;
+			m.visible = ghostOn;
+			m.frustumCulled = false;
+			m.traverse((o) => { o.frustumCulled = false; });
 		}
 	}
 	applyXrPointerPolicy() {
@@ -4003,9 +4010,12 @@ export class GloveFightEngine {
 			const lock = this.tutorialLockMode;
 			const step = this.tutorialStep;
 			if (step === "wave" || lock === "wave") return null;
-			if (lock === "punch") return this.isTutorialShape(side, "punch") ? "punch" : null;
-			if (lock === "slap") return this.isTutorialShape(side, "slap") ? "slap" : null;
-			if (lock === "poke") return this.isTutorialShape(side, "poke") ? "poke" : null;
+			if (lock === "punch" || lock === "slap" || lock === "poke") {
+				if (this.isTutorialShape(side, lock)) return lock;
+				const live = this.liveHandClass(side);
+				if (live?.mode === "punch" || live?.mode === "slap" || live?.mode === "poke") return live.mode;
+				return lock;
+			}
 			if (lock === "heart") return this.isTutorialShape(side, "heart") ? "heart" : null;
 		}
 		const g = side === "L" ? this.handGestureL : this.handGestureR;
