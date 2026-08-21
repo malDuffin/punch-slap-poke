@@ -8020,7 +8020,7 @@ export class GloveFightEngine {
 				const toPlayer = this.tmp.copy(playerPos).sub(e.mesh.position);
 				toPlayer.y = 0;
 				const dist = toPlayer.length();
-				const speed = e.enemyType === "rusher" ? 0.95 + this.wave * .04 : e.enemyType === "thrower" ? 0.4 : 0.58;
+				const speed = e.enemyType === "rusher" ? 0.475 + this.wave * .02 : e.enemyType === "thrower" ? 0.2 : 0.29;
 				if (dist > 1.45) {
 					toPlayer.normalize();
 					e.mesh.position.addScaledVector(toPlayer, speed * dt);
