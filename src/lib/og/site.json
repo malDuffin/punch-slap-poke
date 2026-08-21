@@ -1,0 +1,8 @@
+{
+  "title": "Glove Fight — Punch, Slap, Poke",
+  "description": "First-person beat-em-up: Rock punches, Paper slaps, Scissors pokes. Desktop, mobile, camera hands, and WebXR VR.",
+  "type": "x:game",
+  "card": "custom",
+  "image": "/og.jpg",
+  "banner": "/x-banner.jpg"
+}
