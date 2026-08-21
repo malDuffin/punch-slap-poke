@@ -260,6 +260,34 @@ function classifyRps(lm: NormalizedLandmark[]): {
     return { gesture: "punch", mode: "punch", confidence: 0.88, label: "rock" };
   }
 
+  // Half-heart FIRST: ONLY thumb + index. Ignore middle / ring / pinky completely.
+  {
+    const tip = lm[4]!;
+    const indexTip = lm[8]!;
+    const indexPip = lm[6]!;
+    const wristLm = lm[0]!;
+    const palm = dist(lm[5]!, lm[17]!) || 0.08;
+    const aperture = dist(tip, indexTip);
+    const indexReach = dist(indexTip, wristLm);
+    const thumbReach = dist(tip, wristLm);
+    const toPip = dist(tip, indexPip);
+    const tx = tip.x - wristLm.x, ty = tip.y - wristLm.y, tz = (tip.z ?? 0) - (wristLm.z ?? 0);
+    const ix = indexTip.x - wristLm.x, iy = indexTip.y - wristLm.y, iz = (indexTip.z ?? 0) - (wristLm.z ?? 0);
+    const tl = Math.hypot(tx, ty, tz), il = Math.hypot(ix, iy, iz);
+    const cos = (tl > 1e-5 && il > 1e-5) ? (tx * ix + ty * iy + tz * iz) / (tl * il) : 1;
+    const openC = aperture > palm * 0.5 && aperture < palm * 3.8;
+    if (
+      openC
+      && indexReach > palm * 0.48
+      && thumbReach > palm * 0.32
+      && toPip > palm * 0.2
+      && cos < 0.9
+      && cos > -0.4
+    ) {
+      return { gesture: "heart", mode: null, confidence: 0.92, label: "half_heart" };
+    }
+  }
+
   // Punch first: thumb + fingers bunched together is never a heart, any orientation.
   {
     const thumbTip = lm[4]!;
@@ -297,23 +325,6 @@ function classifyRps(lm: NormalizedLandmark[]): {
         return { gesture: "peace", mode: "poke", confidence: 0.9, label: "peace" };
       }
       return { gesture: "poke", mode: "poke", confidence: 0.94, label: "scissors" };
-    }
-  }
-
-  // Half-heart: ONLY thumb + index. Ignore other fingers. Thumb BELOW index (image y grows down).
-  {
-    const tip = lm[4]!;
-    const indexTip = lm[8]!;
-    const indexPip = lm[6]!;
-    const wristLm = lm[0]!;
-    const palm = dist(lm[5]!, lm[17]!) || 0.08;
-    const aperture = dist(tip, indexTip);
-    const tucked = dist(tip, indexPip) < palm * 0.38;
-    const indexReach = dist(indexTip, wristLm) > palm * 0.62;
-    const thumbBelow = tip.y > indexTip.y + 0.02;
-    const openC = aperture > palm * 0.82 && aperture < palm * 3.2;
-    if (!tucked && indexReach && openC && thumbBelow) {
-      return { gesture: "heart", mode: null, confidence: 0.92, label: "half_heart" };
     }
   }
 

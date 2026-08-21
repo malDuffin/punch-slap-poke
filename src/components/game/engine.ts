@@ -1670,21 +1670,18 @@ export class GloveFightEngine {
 		if (L.landmarks.length < 21 || R.landmarks.length < 21) return false;
 		const li = L.landmarks[8], ri = R.landmarks[8];
 		const lt = L.landmarks[4], rt = R.landmarks[4];
-		const lw = L.landmarks[0], rw = R.landmarks[0];
-		if (!li || !ri || !lt || !rt || !lw || !rw) return false;
+		if (!li || !ri || !lt || !rt) return false;
 		const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 		const indexDist = d(li, ri);
 		const thumbDist = d(lt, rt);
-		const wristDist = d(lw, rw);
-		// Tips close, thumbs close — halves must actually meet (forgiving on camera)
-		if (indexDist > 0.2 || thumbDist > 0.22 || wristDist > 0.55) return false;
-		// In image coords y grows downward — thumbs should be below index tips
-		const tipY = (li.y + ri.y) * 0.5;
-		const thY = (lt.y + rt.y) * 0.5;
-		if (thY < tipY - 0.01) return false; // thumbs not below
-		// Heart height reasonable
-		if (thY - tipY < 0.03 || thY - tipY > 0.28) return false;
-		return true;
+		const cL = { x: (li.x + lt.x) * 0.5, y: (li.y + lt.y) * 0.5 };
+		const cR = { x: (ri.x + rt.x) * 0.5, y: (ri.y + rt.y) * 0.5 };
+		const cupDist = d(cL, cR);
+		// Thumb + index only. No world-up / other-finger tests.
+		if (cupDist < 0.28) return true;
+		if (indexDist < 0.28 && thumbDist < 0.32) return true;
+		if ((indexDist < 0.16 || thumbDist < 0.16) && cupDist < 0.4) return true;
+		return false;
 	}
 	detectTwoHandHeartXR(frame, refSpace, handL, handR) {
 		const wp = (hand, name) => {
@@ -1695,38 +1692,22 @@ export class GloveFightEngine {
 			const p = pose.transform.position;
 			return this.xrRefToWorld(new THREE.Vector3(p.x, p.y, p.z));
 		};
+		// Join uses thumb + index only.
 		const li = wp(handL, "index-finger-tip");
 		const ri = wp(handR, "index-finger-tip");
 		const lt = wp(handL, "thumb-tip");
 		const rt = wp(handR, "thumb-tip");
-		const lw = wp(handL, "wrist");
-		const rw = wp(handR, "wrist");
-		if (!li || !ri || !lt || !rt || !lw || !rw) return false;
+		if (!li || !ri || !lt || !rt) return false;
 		const d = (a, b) => a.distanceTo(b);
-		const apL = d(li, lt);
-		const apR = d(ri, rt);
-		const ap = Math.max(0.05, 0.5 * (apL + apR));
 		const indexGap = d(li, ri);
 		const thumbGap = d(lt, rt);
-		const midL = li.clone().add(lt).multiplyScalar(0.5);
-		const midR = ri.clone().add(rt).multiplyScalar(0.5);
-		const centerGap = midL.distanceTo(midR);
-		// Join when the two C openings meet — no world-upright requirement
-		// (looking down at a heart used to fail the old thumbY < indexY test).
-		const tipsMeet = indexGap < Math.max(0.18, ap * 1.2) && thumbGap < Math.max(0.2, ap * 1.3);
-		const cupsMeet = centerGap < Math.max(0.18, ap * 1.1);
-		if (!tipsMeet && !cupsMeet) return false;
-		if (d(lw, rw) > 0.72) return false;
-		const openL = midL.clone().sub(lw);
-		const openR = midR.clone().sub(rw);
-		const toR = midR.clone().sub(midL);
-		if (openL.lengthSq() > 1e-6 && toR.lengthSq() > 1e-6 && openL.normalize().dot(toR.clone().normalize()) < -0.45) {
-			return false;
-		}
-		if (openR.lengthSq() > 1e-6 && toR.lengthSq() > 1e-6 && openR.normalize().dot(toR.clone().negate().normalize()) < -0.45) {
-			return false;
-		}
-		return true;
+		const cL = li.clone().add(lt).multiplyScalar(0.5);
+		const cR = ri.clone().add(rt).multiplyScalar(0.5);
+		const cupGap = d(cL, cR);
+		const tipsClose = indexGap < 0.32 && thumbGap < 0.36;
+		const cupsClose = cupGap < 0.30;
+		const onePairTouching = (indexGap < 0.18 || thumbGap < 0.18) && cupGap < 0.42;
+		return tipsClose || cupsClose || onePairTouching;
 	}
 	toggleMute() {
 		this.audio.setMuted(!this.audio.muted);
@@ -2892,12 +2873,12 @@ export class GloveFightEngine {
 			const connected = bothHalves && this.detectTwoHandHeartXR(frame, refSpace, xrHandL, xrHandR);
 			if (connected) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + Math.max(0.016, dt || 0.016);
-				if (this.heartDetectHold > 0.12) {
+				if (this.heartDetectHold > 0.06) {
 					this.spawnHeartShield();
 					this.heartDetectHold = -0.9;
 				}
 			} else if ((this.heartDetectHold || 0) > 0) {
-				this.heartDetectHold = Math.max(0, this.heartDetectHold - Math.max(0.016, dt || 0.016) * 3);
+				this.heartDetectHold = Math.max(0, this.heartDetectHold - Math.max(0.016, dt || 0.016));
 			}
 		}
 	}
@@ -3028,10 +3009,33 @@ export class GloveFightEngine {
 		const thumbTip = joint("thumb-tip");
 		const indexPip = joint("index-finger-phalanx-proximal");
 		const middlePip = joint("middle-finger-phalanx-proximal");
-		if (!wrist || !indexTip || !middleTip) return null;
+		if (!wrist || !indexTip) return null;
 		const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 		const midMet = joint("middle-finger-metacarpal") || middlePip || middleTip;
-		const palm = Math.max(0.04, dist(wrist, midMet));
+		const palm = Math.max(0.04, dist(wrist, midMet || indexTip));
+		// Half-heart FIRST: thumb + index only. Middle / ring / pinky are ignored.
+		if (thumbTip) {
+			const aperture = dist(thumbTip, indexTip);
+			const indexReach = dist(wrist, indexTip);
+			const thumbReach = dist(wrist, thumbTip);
+			const toPip = indexPip ? dist(thumbTip, indexPip) : 99;
+			const tx = thumbTip.x - wrist.x, ty = thumbTip.y - wrist.y, tz = thumbTip.z - wrist.z;
+			const ix = indexTip.x - wrist.x, iy = indexTip.y - wrist.y, iz = indexTip.z - wrist.z;
+			const tl = Math.hypot(tx, ty, tz), il = Math.hypot(ix, iy, iz);
+			const cos = (tl > 1e-5 && il > 1e-5) ? (tx * ix + ty * iy + tz * iz) / (tl * il) : 1;
+			const openC = aperture > palm * 0.5 && aperture < palm * 3.8;
+			if (
+				openC
+				&& indexReach > palm * 0.48
+				&& thumbReach > palm * 0.32
+				&& toPip > palm * 0.2
+				&& cos < 0.9
+				&& cos > -0.4
+			) {
+				return { mode: null, gesture: "heart", curl: 2 };
+			}
+		}
+		if (!middleTip) return null;
 		const ringPip = joint("ring-finger-phalanx-proximal");
 		const pinkyPip = joint("pinky-finger-phalanx-proximal");
 		const ringMcp = joint("ring-finger-metacarpal") || ringPip;
@@ -3163,19 +3167,6 @@ export class GloveFightEngine {
 					return { mode: "poke", gesture: "peace", curl: n };
 				}
 				return { mode: "poke", gesture: "poke", curl: n };
-			}
-		}
-
-		// Half-heart: ONLY thumb + index. Middle / ring / pinky are ignored completely.
-		if (thumbTip && indexTip) {
-			const aperture = dist(thumbTip, indexTip);
-			const toPip = indexPip ? dist(thumbTip, indexPip) : 99;
-			const thumbBelow = thumbTip.y < indexTip.y - 0.014;
-			const openC = aperture > palm * 0.82 && aperture < palm * 3.4;
-			const thumbNotOnKnuckle = toPip > palm * 0.38;
-			const indexReach = dist(wrist, indexTip) > palm * 0.62;
-			if (openC && thumbBelow && thumbNotOnKnuckle && indexReach) {
-				return { mode: null, gesture: "heart", curl: n };
 			}
 		}
 
@@ -5055,23 +5046,16 @@ export class GloveFightEngine {
 		}
 		const involvesRemote = !!(bestPair && (!bestPair[0].local || !bestPair[1].local));
 		const bothLocalHeart = this.handGestureL === "heart" && this.handGestureR === "heart";
-		// Local fusion is handled by XR / camera tip detectors. Only remote pairs fuse here,
-		// and only when the halves are actually touching.
-		const touch = distPair < 0.13;
-		if (involvesRemote && touch) {
+		const localTouch = bothLocalHeart && distPair < 0.30;
+		const remoteTouch = involvesRemote && distPair < 0.18;
+		if (localTouch || remoteTouch) {
 			this.heartDetectHold = (this.heartDetectHold || 0) + (dt || 0.016);
-			if (this.heartDetectHold > 0.4) {
+			if (this.heartDetectHold > 0.08) {
 				const mid = bestPair[0].pos.clone().add(bestPair[1].pos).multiplyScalar(0.5);
-				this.spawnHeartShield(mid);
+				this.spawnHeartShield(involvesRemote ? mid : null);
 				this.heartDetectHold = -0.9;
 			}
-		} else if (!this.xrActive && !this.cameraHands && bothLocalHeart && touch) {
-			this.heartDetectHold = (this.heartDetectHold || 0) + (dt || 0.016);
-			if (this.heartDetectHold > 0.4) {
-				this.spawnHeartShield();
-				this.heartDetectHold = -0.9;
-			}
-		} else if (!this.xrActive && !this.cameraHands && (this.heartDetectHold || 0) > 0 && !touch) {
+		} else if ((this.heartDetectHold || 0) > 0) {
 			this.heartDetectHold = Math.max(0, this.heartDetectHold - (dt || 0.016) * 3);
 		}
 	}
@@ -7572,12 +7556,12 @@ export class GloveFightEngine {
 			if (modes?.R && modes.R !== this.modeR) this.applyHandMode("R", modes.R, false);
 			if (fr.hands?.length >= 2 && this.handGestureL === "heart" && this.handGestureR === "heart" && this.detectTwoHandHeartCam(fr.hands)) {
 				this.heartDetectHold = (this.heartDetectHold || 0) + 0.032;
-				if (this.heartDetectHold > 0.12) {
+				if (this.heartDetectHold > 0.06) {
 					this.spawnHeartShield();
 					this.heartDetectHold = -0.9;
 				}
 			} else if (!this.xrActive && (this.heartDetectHold || 0) > 0) {
-				this.heartDetectHold = Math.max(0, this.heartDetectHold - 0.06);
+				this.heartDetectHold = Math.max(0, this.heartDetectHold - 0.03);
 			}
 			for (const h of fr.hands || []) {
 				this.cameraGesture = `${h.side}:${h.gesture || h.mode || "?"}${h.click ? "·CLICK" : ""}`;
