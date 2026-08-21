@@ -385,6 +385,8 @@ export class GloveFightEngine {
 	heartShieldCdUntil = 0;
 	heartShieldEntity = null;
 	heartDetectHold = 0;
+	heartHalfHideUntil = 0;
+	heartDrops = [];
 	/** Social / emoji gesture props on hands (null = show combat RPS mesh) */
 	handGestureL = null;
 	handGestureR = null;
@@ -1241,6 +1243,7 @@ export class GloveFightEngine {
 
 	canSpawnHeartShield() {
 		if (this.tutorialInputLocked()) return false;
+		if (this.time < (this.heartHalfHideUntil || 0)) return false;
 		if (this.phase === "tutorial") return this.tutorialStep === "heart";
 		return this.phase === "playing" || this.phase === "waveClear" || this.phase === "victory";
 	}
@@ -1629,13 +1632,13 @@ export class GloveFightEngine {
 	/** Two-hand heart → temporary damage shield. Optional world-space fuse point. */
 	spawnHeartShield(at = null) {
 		if (!this.canSpawnHeartShield()) return;
+		if (this.heartShieldEntity && this.heartShieldEntity.alive) {
+			this.dropHeartHalves();
+			return;
+		}
 		if (this.time < this.heartShieldCdUntil && !(this.phase === "tutorial" && this.tutorialStep === "heart")) {
 			this.pushMsg("Shield cooling…", 0.7);
 			return;
-		}
-		if (this.heartShieldEntity && this.heartShieldEntity.alive) {
-			this.heartShieldEntity.alive = false;
-			if (this.heartShieldEntity.mesh?.parent) this.heartShieldEntity.mesh.parent.remove(this.heartShieldEntity.mesh);
 		}
 		this.enterHeartPose();
 		const mesh = makeHeartShield(this.palette);
@@ -1687,6 +1690,82 @@ export class GloveFightEngine {
 		if (this.bloomPass) this.bloomPass.strength = this.isMobile ? 0.9 : 1.25;
 		this.noteTutorialAction("heart");
 		this.emitHud();
+	}
+	dropHeartHalves() {
+		if (this.time < (this.heartHalfHideUntil || 0)) return;
+		if (!this.heartDrops) this.heartDrops = [];
+		for (const side of ["L", "R"]) {
+			const src = this.heartMeshFor(side);
+			const pos = new THREE.Vector3();
+			const quat = new THREE.Quaternion();
+			const scl = new THREE.Vector3(0.12, 0.12, 0.12);
+			if (src) {
+				src.updateWorldMatrix(true, true);
+				src.matrixWorld.decompose(pos, quat, scl);
+			}
+			if (pos.lengthSq() < 1e-6) {
+				const seat = side === "L" ? this.heartSeatL : this.heartSeatR;
+				if (seat) pos.copy(seat);
+				else {
+					const wp = this.worldHandPos(side);
+					if (wp) pos.copy(wp);
+				}
+			}
+			if (pos.lengthSq() < 1e-6) continue;
+			const clone = makeHeartHalf(this.palette, side);
+			this.uniquifyMaterials(clone);
+			clone.position.copy(pos);
+			clone.quaternion.copy(quat);
+			if (scl.lengthSq() < 1e-6) scl.set(0.12, 0.12, 0.12);
+			clone.scale.copy(scl);
+			clone.visible = true;
+			clone.renderOrder = 26;
+			this.scene.add(clone);
+			setHeartHalfGlow(clone, 0.85);
+			const dir = side === "L" ? -1 : 1;
+			this.heartDrops.push({
+				mesh: clone,
+				vel: new THREE.Vector3(dir * (0.45 + Math.random() * 0.28), 0.22 + Math.random() * 0.2, -0.12 + Math.random() * -0.18),
+				spin: new THREE.Vector3((Math.random() - 0.5) * 7, dir * (2.4 + Math.random() * 3.2), (Math.random() - 0.5) * 5),
+				age: 0,
+				life: 1.2,
+			});
+		}
+		this.heartHalfHideUntil = this.time + 1;
+		this.heartDetectHold = -1;
+		this.heartStickyUntilL = 0;
+		this.heartStickyUntilR = 0;
+		this.hideHeartConnector();
+		if (this.handGestureL === "heart") this.setHandGesture("L", null);
+		if (this.handGestureR === "heart") this.setHandGesture("R", null);
+		this.updateHandMeshes();
+		this.syncXrGloves();
+		if (this.audio.whoosh) this.audio.whoosh();
+	}
+	tickHeartDrops(dt) {
+		const list = this.heartDrops;
+		if (!list || !list.length) return;
+		for (let i = list.length - 1; i >= 0; i--) {
+			const d = list[i];
+			d.age += dt;
+			d.vel.y -= 5.4 * dt;
+			d.mesh.position.addScaledVector(d.vel, dt);
+			d.mesh.rotation.x += d.spin.x * dt;
+			d.mesh.rotation.y += d.spin.y * dt;
+			d.mesh.rotation.z += d.spin.z * dt;
+			const fade = THREE.MathUtils.clamp(1 - (d.age - 0.35) / Math.max(0.01, d.life - 0.35), 0, 1);
+			d.mesh.traverse((o) => {
+				if (!o.material) return;
+				const mats = Array.isArray(o.material) ? o.material : [o.material];
+				for (const m of mats) {
+					if (m.opacity != null) m.opacity = (m.userData._dropOp ?? (m.userData._dropOp = m.opacity)) * fade;
+				}
+			});
+			if (d.age >= d.life) {
+				if (d.mesh.parent) d.mesh.parent.remove(d.mesh);
+				list.splice(i, 1);
+			}
+		}
 	}
 	/**
 	 * Detect two hands forming a heart (index tips together on top, thumbs together below).
@@ -1750,6 +1829,7 @@ export class GloveFightEngine {
 		return this.heartSeatR || this.worldHandPos("R");
 	}
 	heartHalvesShowing() {
+		if (this.time < (this.heartHalfHideUntil || 0)) return false;
 		const gestL = this.handGestureL === "heart" || this.time < (this.heartStickyUntilL || 0);
 		const gestR = this.handGestureR === "heart" || this.time < (this.heartStickyUntilR || 0);
 		const meshL = this.heartMeshFor("L");
@@ -3097,6 +3177,12 @@ export class GloveFightEngine {
 			return;
 		}
 		if (g === "heart") {
+			if (this.time < (this.heartHalfHideUntil || 0)) {
+				this[heartFramesKey] = 0;
+				this[kindKey] = null;
+				this.setHandGesture(side, null);
+				return;
+			}
 			if (this.phase === "tutorial" && this.tutorialLockMode !== "heart") {
 				this[heartFramesKey] = 0;
 				this[kindKey] = null;
@@ -4070,6 +4156,7 @@ export class GloveFightEngine {
 	}
 	/** Which mesh key to show for a hand (gesture props override combat). */
 	handMeshKey(side) {
+		const heartBlocked = this.time < (this.heartHalfHideUntil || 0);
 		if (this.phase === "tutorial") {
 			const lock = this.tutorialLockMode;
 			const step = this.tutorialStep;
@@ -4077,10 +4164,10 @@ export class GloveFightEngine {
 			if (lock === "punch" || lock === "slap" || lock === "poke") {
 				return this.isTutorialShape(side, lock) ? lock : null;
 			}
-			if (lock === "heart") return this.isTutorialShape(side, "heart") ? "heart" : null;
+			if (lock === "heart") return (!heartBlocked && this.isTutorialShape(side, "heart")) ? "heart" : null;
 		}
 		const g = side === "L" ? this.handGestureL : this.handGestureR;
-		if (g === "heart") return "heart";
+		if (g === "heart") return heartBlocked ? null : "heart";
 		if (g && g !== "none" && g !== "punch" && g !== "slap" && g !== "poke") return g;
 		return side === "L" ? this.modeL : this.modeR;
 	}
@@ -4500,6 +4587,13 @@ export class GloveFightEngine {
 		this.heartShieldUntil = 0;
 		this.heartShieldCdUntil = 0;
 		this.heartShieldEntity = null;
+		this.heartHalfHideUntil = 0;
+		if (this.heartDrops) {
+			for (const d of this.heartDrops) {
+				if (d.mesh?.parent) d.mesh.parent.remove(d.mesh);
+			}
+		}
+		this.heartDrops = [];
 		this.heartDetectHold = 0;
 		this.clickBoostL = false;
 		this.clickBoostR = false;
@@ -5221,6 +5315,7 @@ export class GloveFightEngine {
 		return side === "L" ? this.leftMeshes?.heart : this.rightMeshes?.heart;
 	}
 	updateHeartGlow(dt) {
+		this.tickHeartDrops(dt);
 		const showing = this.heartHalvesShowing();
 		const bothLocal = showing;
 		const halves = [];
@@ -5279,7 +5374,7 @@ export class GloveFightEngine {
 		const shown = new Set();
 		if (bestPair) {
 			for (const h of bestPair) {
-				if (h.mesh) { setHeartHalfGlow(h.mesh, this.heartGlow); shown.add(h.mesh); }
+				if (h.mesh) { setHeartHalfGlow(h.mesh, Math.min(1, 0.12 + this.heartGlow * 1.15)); shown.add(h.mesh); }
 			}
 		}
 		for (const h of halves) {

@@ -1774,19 +1774,26 @@ export type GestureKind = "thumbs" | "thumbsDown" | "peace" | "spock" | "heart" 
 export function setHeartHalfGlow(g: THREE.Object3D | null | undefined, amount = 0) {
   if (!g) return;
   const t = THREE.MathUtils.clamp(amount, 0, 1);
+  const hot = t * t;
   const mats = (g as THREE.Group).userData?.heartMats as THREE.MeshStandardMaterial[] | undefined;
   if (mats) {
     for (const m of mats) {
       if (!m) continue;
-      m.emissiveIntensity = 0.85 + t * 1.6;
-      if (m.opacity != null) m.opacity = 0.88 + t * 0.12;
+      m.emissiveIntensity = 0.55 + t * 3.8;
+      if (m.opacity != null) m.opacity = 0.82 + t * 0.18;
+      if (m.color) m.color.setHex(t > 0.62 ? 0xffe6f2 : t > 0.32 ? 0xff8ab8 : 0xff4d8d);
+      if (m.emissive) m.emissive.setHex(t > 0.55 ? 0xffc0dd : 0xff2a6a);
     }
   }
   const halo = (g as THREE.Group).userData?.heartHalo as THREE.Mesh | undefined;
   if (halo && (halo.material as THREE.MeshBasicMaterial)) {
-    (halo.material as THREE.MeshBasicMaterial).opacity = 0.16 + t * 0.55;
-    halo.scale.setScalar(1 + t * 0.45);
+    const hm = halo.material as THREE.MeshBasicMaterial;
+    hm.opacity = 0.12 + t * 0.82;
+    if (hm.color) hm.color.setHex(t > 0.55 ? 0xfff0f8 : 0xff7eb0);
+    halo.scale.setScalar(1 + t * 1.35 + hot * 0.35);
   }
+  const stroke = (g as THREE.Group).userData?.heartStroke as THREE.Mesh | undefined;
+  if (stroke) stroke.scale.setScalar(1 + t * 0.12);
 }
 
 /** Factory for social / emoji hand props. */
