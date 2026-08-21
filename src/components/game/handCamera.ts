@@ -167,7 +167,7 @@ function fingerBlade(lm: NormalizedLandmark[], tip: number, pip: number, mcp: nu
   const tipD = dist(wrist, t);
   const pipD = dist(wrist, p);
   const palm = dist(lm[5]!, lm[17]!) || 0.08;
-  return tipD > pipD * 1.02 && tipD > palm * 0.78 && cos < 0.15;
+  return tipD > pipD * 0.98 && tipD > palm * 0.68 && cos < 0.5;
 }
 
 function fingerOpen(lm: NormalizedLandmark[], tip: number, pip: number, mcp: number): boolean {
@@ -282,19 +282,19 @@ function classifyRps(lm: NormalizedLandmark[]): {
     }
   }
 
-  // Scissors: two blades OUT (together or a wide V), other two not straight. Ignore thumb.
+  // Scissors: two blades OUT (together or a wide V). Ring/pinky not paper-straight.
   {
     const indexS = fingerBlade(lm, 8, 6, 5);
     const middleS = fingerBlade(lm, 12, 10, 9);
-    const ringT = !fingerStraight(lm, 16, 14, 13) && !fingerOpen(lm, 16, 14, 13);
-    const pinkyT = !fingerStraight(lm, 20, 18, 17) && !fingerOpen(lm, 20, 18, 17);
-    if (indexS && middleS && ringT && pinkyT) {
+    const ringPaper = fingerOpen(lm, 16, 14, 13);
+    const pinkyPaper = fingerOpen(lm, 20, 18, 17);
+    if (indexS && middleS && !ringPaper && !pinkyPaper) {
       const indexTip = lm[8]!;
       const wristLm = lm[0]!;
       const up = wristLm.y - indexTip.y;
       const side = Math.abs(indexTip.x - wristLm.x);
-      if (up > 0.05 && up > side * 1.1) {
-        return { gesture: "peace", mode: null, confidence: 0.9, label: "peace" };
+      if (up > 0.07 && up > side * 1.25) {
+        return { gesture: "peace", mode: "poke", confidence: 0.9, label: "peace" };
       }
       return { gesture: "poke", mode: "poke", confidence: 0.94, label: "scissors" };
     }
@@ -351,8 +351,8 @@ function classifyRps(lm: NormalizedLandmark[]): {
       const wristLm = lm[0]!;
       const up = wristLm.y - indexTip.y;
       const side = Math.abs(indexTip.x - wristLm.x);
-      if (up > 0.045 && up > side * 1.05) {
-        return { gesture: "peace", mode: null, confidence: 0.9, label: "peace" };
+      if (up > 0.07 && up > side * 1.2) {
+        return { gesture: "peace", mode: "poke", confidence: 0.9, label: "peace" };
       }
       return { gesture: "poke", mode: "poke", confidence: 0.92, label: "scissors" };
     }
@@ -752,7 +752,7 @@ export class HandCameraTracker {
       const palmFacing = computePalmFacing(lm, handed?.categoryName || (side === "R" ? "Right" : "Left"));
       const motion = this.detectStrike(side, size, z, my, mx, palmFacing, nowMs);
       const fingerClick = this.detectFingerClick(side, lm, nowMs);
-      const snipInfo = this.detectScissorSnip(side, lm, nowMs, mode === "poke" || gesture === "poke");
+      const snipInfo = this.detectScissorSnip(side, lm, nowMs);
 
       // Mirrored landmarks for skeleton overlay
       const landmarks: TrackedLandmark[] = lm.map((p) => ({
@@ -878,51 +878,64 @@ export class HandCameraTracker {
     side: "L" | "R",
     lm: NormalizedLandmark[],
     nowMs: number,
-    blades: boolean,
   ): { snip: boolean; power: number } {
     const index = lm[8];
     const middle = lm[12];
-    if (!index || !middle) return { snip: false, power: 0 };
+    const wrist = lm[0];
+    if (!index || !middle || !wrist) return { snip: false, power: 0 };
     const palm = palmSize(lm) || 0.1;
     const gap = dist(index, middle);
+    const tipOut = (tip: number, pip: number) => {
+      const t = lm[tip];
+      const p = lm[pip];
+      if (!t) return false;
+      const tipD = dist(wrist, t);
+      const pipD = p ? dist(wrist, p) : palm * 0.55;
+      return tipD > pipD * 0.96 && tipD > palm * 0.62;
+    };
+    const indexOut = tipOut(8, 6);
+    const middleOut = tipOut(12, 10);
+    const indexTipD = dist(wrist, index);
+    const middleTipD = dist(wrist, middle);
+    const ringTipD = lm[16] ? dist(wrist, lm[16]) : 0;
+    const pinkyTipD = lm[20] ? dist(wrist, lm[20]) : 0;
+    const scissorsLike = indexOut && middleOut
+      && indexTipD >= ringTipD * 0.88
+      && middleTipD >= pinkyTipD * 0.88;
     let st = this.snipState.get(side);
     if (!st) {
       st = { open: false, peakGap: 0, lastGap: gap, cdUntil: 0, t: nowMs };
       this.snipState.set(side, st);
     }
-    const dt = Math.min(0.08, Math.max(0.008, (nowMs - (st.t || nowMs)) / 1000));
     st.t = nowMs;
     if (nowMs < st.cdUntil) {
       st.lastGap = gap;
       return { snip: false, power: 0 };
     }
-    if (!blades) {
-      const indexOut = fingerBlade(lm, 8, 6, 5);
-      const middleOut = fingerBlade(lm, 12, 10, 9);
-      if (!indexOut || !middleOut) {
-        st.open = false;
-        st.peakGap = 0;
-      }
+    if (!indexOut || !middleOut) {
+      st.open = false;
+      st.peakGap = 0;
       st.lastGap = gap;
       return { snip: false, power: 0 };
     }
-    const OPEN = palm * 0.42;
-    const CLOSE = palm * 0.22;
-    const MIN_PEAK = palm * 0.48;
-    if (gap > OPEN) {
+    if (gap >= (st.lastGap || gap) - palm * 0.004) {
+      st.peakGap = Math.max(st.peakGap || 0, gap);
+    }
+    if (gap > palm * 0.22) {
       st.open = true;
       st.peakGap = Math.max(st.peakGap || 0, gap);
     }
-    const vel = ((st.lastGap || gap) - gap) / dt;
-    const crossed = st.open && (st.peakGap || 0) >= MIN_PEAK && (st.lastGap || 0) >= CLOSE && gap < CLOSE;
-    const snipped = crossed && vel > 0.08;
+    const peak = st.peakGap || 0;
+    const drop = peak - gap;
+    const closed = gap < palm * 0.38 || gap < peak * 0.64;
+    const snipped = scissorsLike && st.open && peak >= palm * 0.26 && drop >= palm * 0.10 && closed;
     st.lastGap = gap;
     if (!snipped) return { snip: false, power: 0 };
-    const travel = Math.max(0.01, (st.peakGap || gap) - gap);
+    const travel = Math.max(0.01, drop);
     st.open = false;
     st.peakGap = 0;
-    st.cdUntil = nowMs + 280;
-    const power = Math.max(0.3, Math.min(1.35, 0.32 + travel * 6 + vel * 0.1));
+    st.cdUntil = nowMs + 320;
+    const power = Math.max(0.3, Math.min(1.35, 0.35 + travel * 6));
     return { snip: true, power };
   }
 

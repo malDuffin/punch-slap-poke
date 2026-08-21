@@ -280,6 +280,14 @@ export function GloveFight() {
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
+      <svg width="0" height="0" className="absolute" aria-hidden="true" focusable="false">
+        <filter id="liquidGlassDistort" x="-8%" y="-8%" width="116%" height="116%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.012 0.02" numOctaves="2" seed="2" result="noise">
+            <animate attributeName="baseFrequency" dur="9s" repeatCount="indefinite" values="0.01 0.018;0.016 0.014;0.01 0.018" />
+          </feTurbulence>
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="14" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      </svg>
       <canvas
         ref={canvasRef}
         className="absolute inset-0 z-0 h-full w-full touch-none"
@@ -763,7 +771,7 @@ export function GloveFight() {
         <div className="pointer-events-none absolute inset-0 z-50 flex items-start justify-center overflow-y-auto bg-bg/55 p-4 backdrop-blur-[2px]">
           <div
             data-panel
-            className="pointer-events-auto animate-float-in my-4 w-full max-w-md max-h-[min(92dvh,46rem)] overflow-y-auto rounded-[var(--radius-xl)] border border-border bg-surface/92 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            className="liquid-glass pointer-events-auto animate-float-in my-4 w-full max-w-md max-h-[min(92dvh,46rem)] overflow-y-auto rounded-[var(--radius-xl)] p-6"
             style={{ touchAction: "pan-y" }}
           >
             {hud.phase === "menu" && (

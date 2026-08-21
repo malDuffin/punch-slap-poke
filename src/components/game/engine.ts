@@ -8,6 +8,7 @@ import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
 import { XRHandModelFactory } from "three/addons/webxr/XRHandModelFactory.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { GameAudio } from "./audio";
 import {
   createPalette,
@@ -99,8 +100,8 @@ const TUTORIAL_SCRIPT = {
 	poke: {
 		lock: "poke", need: 3,
 		title: "SCISSORS",
-		body: "Index and middle out — they can sit together or spread into a V. Ring and pinky bent. Point them FORWARD (not up). Open the two fingers, then snip them together three times.",
-		hint: "Open the V, then snip",
+		body: "Index and middle out — a wide V is fine. Open the two fingers, then snip them together three times.",
+		hint: "Spread the V, then snip shut",
 	},
 	heart: {
 		lock: "heart", need: 1,
@@ -508,6 +509,8 @@ export class GloveFightEngine {
 	xrGloveMeshesL = null;
 	xrGloveMeshesR = null;
 	xrHud = null;
+	xrHudGlass = null;
+	xrHudGlassMat = null;
 	xrFpsHud = null;
 	xrFpsCanvas = null;
 	xrFpsTex = null;
@@ -862,7 +865,7 @@ export class GloveFightEngine {
 		if (!cls) return false;
 		if (want === "punch") return cls.mode === "punch" || cls.gesture === "punch";
 		if (want === "slap") return cls.mode === "slap" || cls.gesture === "slap";
-		if (want === "poke") return cls.mode === "poke" || cls.gesture === "poke";
+		if (want === "poke") return cls.mode === "poke" || cls.gesture === "poke" || cls.gesture === "peace";
 		if (want === "heart") return cls.gesture === "heart";
 		return false;
 	}
@@ -2286,6 +2289,8 @@ export class GloveFightEngine {
 		);
 		this.xrHudMesh.renderOrder = 20;
 		this.xrHud.add(this.xrHudMesh);
+		this.xrHudGlass = this.makeXrHudGlass();
+		this.xrHud.add(this.xrHudGlass);
 		// Slightly above eye-line so wave-clear panel does not block the path
 		this.xrHud.position.set(0, 0.22, -1.2);
 		this.xrHud.visible = false;
@@ -3076,7 +3081,7 @@ export class GloveFightEngine {
 			const cos = pip ? bendCos(tip, pipP, mcpP) : -1;
 			const tipD = dist(wrist, tip);
 			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
-			return tipD > pipD * 1.02 && tipD > palm * 1.05 && cos < 0.12;
+			return tipD > pipD * 0.98 && tipD > palm * 0.82 && cos < 0.5;
 		};
 		const ext = (tip, pip) => {
 			if (!tip) return false;
@@ -3141,22 +3146,21 @@ export class GloveFightEngine {
 			return { mode: "punch", gesture: "punch", curl: n };
 		}
 
-		// Scissors: index + middle OUT (together or a wide V). Ring + pinky not straight.
-		// Pointing up = peace, forward = scissors pose (snip to fire).
+		// Scissors: index + middle OUT (together or a wide V). Ring + pinky not paper-straight.
 		{
 			const indexBlade = fingerBlade(indexTip, indexPip, indexMcpJ);
 			const middleBlade = fingerBlade(middleTip, middlePip, middleMcp);
-			const ringIn = !fingerStraight(ringTip, ringPip, ringMcp) && !fingerOpen(ringTip, ringPip, ringMcp, ringDip);
-			const pinkyIn = !fingerStraight(pinkyTip, pinkyPip, pinkyMcp) && !fingerOpen(pinkyTip, pinkyPip, pinkyMcp, pinkyDip);
-			if (indexBlade && middleBlade && ringIn && pinkyIn) {
+			const ringPaper = fingerOpen(ringTip, ringPip, ringMcp, ringDip);
+			const pinkyPaper = fingerOpen(pinkyTip, pinkyPip, pinkyMcp, pinkyDip);
+			if (indexBlade && middleBlade && !ringPaper && !pinkyPaper) {
 				const dx = indexTip.x - wrist.x;
 				const dy = indexTip.y - wrist.y;
 				const dz = indexTip.z - wrist.z;
 				const len = Math.max(1e-5, Math.hypot(dx, dy, dz));
 				const upAmt = dy / len;
 				const horiz = Math.hypot(dx, dz);
-				if (upAmt > 0.62 && horiz < Math.abs(dy) * 1.05) {
-					return { mode: null, gesture: "peace", curl: n };
+				if (upAmt > 0.72 && horiz < Math.abs(dy) * 0.85) {
+					return { mode: "poke", gesture: "peace", curl: n };
 				}
 				return { mode: "poke", gesture: "poke", curl: n };
 			}
@@ -3282,82 +3286,62 @@ export class GloveFightEngine {
 		const wrist = joint("wrist");
 		const indexPip = joint("index-finger-phalanx-proximal");
 		const middlePip = joint("middle-finger-phalanx-proximal");
-		const ringPip = joint("ring-finger-phalanx-proximal");
-		const pinkyPip = joint("pinky-finger-phalanx-proximal");
-		const indexMcp = joint("index-finger-metacarpal") || indexPip;
-		const middleMcp = joint("middle-finger-metacarpal") || middlePip;
-		const ringMcp = joint("ring-finger-metacarpal") || ringPip;
-		const pinkyMcp = joint("pinky-finger-metacarpal") || pinkyPip;
 		if (!indexTip || !middleTip || !wrist) return null;
 		const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 		const midMet = joint("middle-finger-metacarpal") || middlePip || middleTip;
 		const palm = Math.max(0.04, dist(wrist, midMet));
-		const bendCos = (tip, pip, mcp) => {
-			if (!tip || !pip || !mcp) return 1;
-			const ax = mcp.x - pip.x, ay = mcp.y - pip.y, az = mcp.z - pip.z;
-			const bx = tip.x - pip.x, by = tip.y - pip.y, bz = tip.z - pip.z;
-			const al = Math.hypot(ax, ay, az), bl = Math.hypot(bx, by, bz);
-			if (al < 1e-5 || bl < 1e-5) return 1;
-			return (ax * bx + ay * by + az * bz) / (al * bl);
-		};
-		const blade = (tip, pip, mcp) => {
+		const tipOut = (tip, pip) => {
 			if (!tip) return false;
-			const mcpP = mcp || wrist;
-			const pipP = pip || mcpP;
-			const cos = pip ? bendCos(tip, pipP, mcpP) : -1;
 			const tipD = dist(wrist, tip);
 			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
-			return tipD > pipD * 1.02 && tipD > palm * 1.05 && cos < 0.12;
+			return tipD > pipD * 0.96 && tipD > palm * 0.72;
 		};
-		const notOpen = (tip, pip, mcp) => {
-			if (!tip) return true;
-			const mcpP = mcp || wrist;
-			const pipP = pip || mcpP;
-			const cos = pip ? bendCos(tip, pipP, mcpP) : 1;
-			const tipD = dist(wrist, tip);
-			const pipD = pip ? dist(wrist, pip) : palm * 0.55;
-			return !(cos < -0.48 && tipD > pipD * 1.08 && tipD > palm * 1.18);
-		};
-		const blades = blade(indexTip, indexPip, indexMcp) && blade(middleTip, middlePip, middleMcp)
-			&& notOpen(ringTip, ringPip, ringMcp) && notOpen(pinkyTip, pinkyPip, pinkyMcp);
+		const indexOut = tipOut(indexTip, indexPip);
+		const middleOut = tipOut(middleTip, middlePip);
+		const indexTipD = dist(wrist, indexTip);
+		const middleTipD = dist(wrist, middleTip);
+		const ringTipD = ringTip ? dist(wrist, ringTip) : 0;
+		const pinkyTipD = pinkyTip ? dist(wrist, pinkyTip) : 0;
+		// Wide V often lifts ring a little — still scissors if index+middle are the long pair.
+		const scissorsLike = indexOut && middleOut
+			&& indexTipD >= ringTipD * 0.88
+			&& middleTipD >= pinkyTipD * 0.88;
 		const gap = dist(indexTip, middleTip);
 		const now = this.time || 0;
 		const key = side === "L" ? "xrSnipL" : "xrSnipR";
 		let st = this[key];
 		if (!st) st = this[key] = { open: false, peakGap: 0, lastGap: gap, cdUntil: 0, t: now };
-		const dt = Math.min(0.08, Math.max(0.006, now - (st.t || now)));
 		st.t = now;
 		if (now < (st.cdUntil || 0)) {
 			st.lastGap = gap;
 			return null;
 		}
-		if (!blades) {
-			if (!blade(indexTip, indexPip, indexMcp) || !blade(middleTip, middlePip, middleMcp)) {
-				st.open = false;
-				st.peakGap = 0;
-			}
+		if (!indexOut || !middleOut) {
+			st.open = false;
+			st.peakGap = 0;
 			st.lastGap = gap;
 			return null;
 		}
-		const OPEN = palm * 0.40;
-		const CLOSE = palm * 0.20;
-		const MIN_PEAK = palm * 0.44;
-		if (gap > OPEN) {
+		if (gap >= (st.lastGap || gap) - palm * 0.004) {
+			st.peakGap = Math.max(st.peakGap || 0, gap);
+		}
+		if (gap > palm * 0.24) {
 			st.open = true;
 			st.peakGap = Math.max(st.peakGap || 0, gap);
 		}
-		const vel = ((st.lastGap || gap) - gap) / dt;
-		const crossed = st.open && (st.peakGap || 0) >= MIN_PEAK && (st.lastGap || 0) >= CLOSE && gap < CLOSE;
-		const snipped = crossed && vel > 0.08;
+		const peak = st.peakGap || 0;
+		const drop = peak - gap;
+		const closed = gap < palm * 0.40 || gap < peak * 0.64;
+		const snipped = scissorsLike && st.open && peak >= palm * 0.28 && drop >= palm * 0.12 && closed;
 		st.lastGap = gap;
 		if (!snipped) return null;
-		const travel = Math.max(0.01, (st.peakGap || gap) - gap);
+		const travel = Math.max(0.01, drop);
 		st.open = false;
 		st.peakGap = 0;
-		st.cdUntil = now + 0.28;
-		const power = THREE.MathUtils.clamp(0.32 + travel * 7 + vel * 0.12, 0.3, 1.4);
-		const speed = THREE.MathUtils.clamp(7 + vel * 3.5 + travel * 18, 5, 32);
-		return { power, speed, travel, vel };
+		st.cdUntil = now + 0.32;
+		const power = THREE.MathUtils.clamp(0.35 + travel * 8, 0.3, 1.4);
+		const speed = THREE.MathUtils.clamp(7 + travel * 22, 5, 32);
+		return { power, speed, travel, vel: travel / 0.12 };
 	}
 	/**
 	 * XR motion: forward punch, wrist snap slap, or full-arm sweep slap.
@@ -4352,6 +4336,78 @@ export class GloveFightEngine {
 		this.spawnStartToys();
 		this.spawnArenaTrees();
 	}
+	makeXrHudGlass() {
+		const n = 256;
+		const c = document.createElement("canvas");
+		c.width = n;
+		c.height = n;
+		const ctx = c.getContext("2d");
+		const img = ctx.createImageData(n, n);
+		const hash = (x, y) => {
+			const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+			return s - Math.floor(s);
+		};
+		const noise = (x, y) => {
+			const xi = Math.floor(x), yi = Math.floor(y);
+			const fx = x - xi, fy = y - yi;
+			const u = fx * fx * (3 - 2 * fx);
+			const v = fy * fy * (3 - 2 * fy);
+			const a = hash(xi, yi), b = hash(xi + 1, yi);
+			const d = hash(xi, yi + 1), e = hash(xi + 1, yi + 1);
+			return a + (b - a) * u + (d - a) * v + (a - b - d + e) * u * v;
+		};
+		const fbm = (x, y) => noise(x, y) * 0.55 + noise(x * 2.1, y * 2.1) * 0.3 + noise(x * 4.3, y * 4.3) * 0.15;
+		for (let y = 0; y < n; y++) {
+			for (let x = 0; x < n; x++) {
+				const i = (y * n + x) * 4;
+				const nx = fbm(x * 0.045, y * 0.04);
+				const ny = fbm(x * 0.04 + 18, y * 0.045 + 9);
+				img.data[i] = Math.floor(nx * 255);
+				img.data[i + 1] = Math.floor(ny * 255);
+				img.data[i + 2] = 255;
+				img.data[i + 3] = 255;
+			}
+		}
+		ctx.putImageData(img, 0, 0);
+		const normalMap = new THREE.CanvasTexture(c);
+		normalMap.wrapS = THREE.RepeatWrapping;
+		normalMap.wrapT = THREE.RepeatWrapping;
+		normalMap.colorSpace = THREE.NoColorSpace;
+		const mat = new THREE.MeshPhysicalMaterial({
+			color: 0xd8e6f4,
+			metalness: 0.02,
+			roughness: 0.18,
+			transmission: 0.92,
+			thickness: 0.085,
+			ior: 1.42,
+			clearcoat: 1,
+			clearcoatRoughness: 0.08,
+			iridescence: 0.28,
+			iridescenceIOR: 1.3,
+			iridescenceThicknessRange: [120, 380],
+			transparent: true,
+			opacity: 1,
+			attenuationColor: new THREE.Color(0xb7d4ee),
+			attenuationDistance: 0.55,
+			normalMap,
+			normalScale: new THREE.Vector2(0.55, 0.55),
+			depthWrite: true,
+			toneMapped: true,
+			side: THREE.FrontSide,
+		});
+		this.xrHudGlassMat = mat;
+		let geom;
+		try {
+			geom = new RoundedBoxGeometry(0.78, 0.40, 0.016, 6, 0.05);
+		} catch {
+			geom = new THREE.BoxGeometry(0.78, 0.40, 0.016);
+		}
+		const mesh = new THREE.Mesh(geom, mat);
+		mesh.position.z = -0.01;
+		mesh.renderOrder = 19;
+		mesh.name = "xrHudGlass";
+		return mesh;
+	}
 	paintXrHud(force = false) {
 		if (!this.xrHudCanvas || !this.xrHudTex) return;
 		const phase = this.phase;
@@ -4380,9 +4436,9 @@ export class GloveFightEngine {
 		}
 
 		const r = 36;
-		ctx.fillStyle = "rgba(12, 10, 18, 0.86)";
-		ctx.strokeStyle = "rgba(255, 210, 80, 0.6)";
-		ctx.lineWidth = 6;
+		ctx.fillStyle = "rgba(18, 28, 42, 0.16)";
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.38)";
+		ctx.lineWidth = 4;
 		ctx.beginPath();
 		if (typeof ctx.roundRect === "function") ctx.roundRect(24, 24, c.width - 48, c.height - 48, r);
 		else ctx.rect(24, 24, c.width - 48, c.height - 48);
@@ -4431,6 +4487,9 @@ export class GloveFightEngine {
 		const countdownLook = phase === "readying" || (phase === "tutorial" && this.tutorialStep === "countdown");
 		ctx.textAlign = "center";
 		ctx.textBaseline = "middle";
+		ctx.shadowColor = "rgba(6, 10, 18, 0.72)";
+		ctx.shadowBlur = 12;
+		ctx.shadowOffsetY = 2;
 		ctx.fillStyle = "#ffe08a";
 		ctx.font = countdownLook
 			? "bold 160px system-ui, Segoe UI, sans-serif"
@@ -4459,6 +4518,9 @@ export class GloveFightEngine {
 			ctx.fillText(foot, c.width / 2, c.height * (phase === "tutorial" && this.tutorialStep === "wave" ? 0.90 : 0.84), c.width - 80);
 		}
 		if (phase === "tutorial" && this.tutorialStep === "wave") {
+			ctx.shadowColor = "transparent";
+			ctx.shadowBlur = 0;
+			ctx.shadowOffsetY = 0;
 			const bx = 90;
 			const by = c.height * 0.78;
 			const bw = c.width - 180;
@@ -6297,7 +6359,8 @@ export class GloveFightEngine {
 			if (this.tutorialLockMode === "heart" || this.tutorialLockMode === "wave" || this.tutorialStep === "wave" || this.tutorialStep === "enter" || this.tutorialStep === "countdown") return;
 			if (opts.forceMode === "grenade") return;
 			if (this.tutorialLockMode === "punch" || this.tutorialLockMode === "slap" || this.tutorialLockMode === "poke") {
-				if (!this.isTutorialShape(hand, this.tutorialLockMode)) return;
+				const snipOk = this.tutorialLockMode === "poke" && opts.forceMode === "poke" && opts.fromMotion;
+				if (!snipOk && !this.isTutorialShape(hand, this.tutorialLockMode)) return;
 			}
 		}
 		const practicing = this.phase === "waveClear" || this.phase === "victory" || this.phase === "tutorial";
@@ -7415,6 +7478,9 @@ export class GloveFightEngine {
 	};
 	update(dt) {
 		this.time += dt;
+		if (this.xrHudGlassMat?.normalMap) {
+			this.xrHudGlassMat.normalMap.offset.set(this.time * 0.032, this.time * 0.021);
+		}
 		if (this.bloomPass) {
 			const target = this.isMobile ? .42 : .68;
 			this.bloomPass.strength += (target - this.bloomPass.strength) * (1 - Math.exp(-2.8 * dt));
